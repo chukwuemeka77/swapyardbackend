@@ -3,8 +3,8 @@ const { Schema } = mongoose;
 
 const userSchema = new Schema(
   {
-    email: { type: String, lowercase: true, trim: true, index: true },
-    phone: { type: String, trim: true, index: true },
+    email: { type: String, lowercase: true, trim: true, index: true, sparse: true },
+    phone: { type: String, trim: true, index: true, sparse: true },
     passwordHash: { type: String, required: true },
     name: { type: String, default: '' },
     profilePicture: { type: String, default: '' },
@@ -16,7 +16,5 @@ const userSchema = new Schema(
   { timestamps: true }
 );
 
-userSchema.index({ email: 1 }, { unique: false, sparse: true });
-userSchema.index({ phone: 1 }, { unique: false, sparse: true });
-
+// Removed duplicate index calls; indexes are already defined inline
 module.exports = mongoose.model('User', userSchema);
