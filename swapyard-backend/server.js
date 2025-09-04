@@ -1,10 +1,11 @@
+// server.js
 const express = require("express");
 const cors = require("cors");
 const mongoose = require("mongoose");
 require("dotenv").config();
 
-const authRoutes = require("./src/routes/auth"); // 👈 signup route file
-const protectedAuthRoutes = require("./src/middleware/auth"); // 👈 /me, /preferences
+const authRoutes = require("./src/routes/auth");   // 👈 adjust path
+const protectedAuthRoutes = require("./src/middleware/auth");
 
 const app = express();
 
@@ -13,8 +14,8 @@ app.use(cors());
 app.use(express.json());
 
 // Routes
-app.use("/api/auth", authRoutes);          // ✅ signup, login etc.
-app.use("/api/auth", protectedAuthRoutes); // ✅ /me, /preferences
+app.use("/api/auth", authRoutes);          // signup/login
+app.use("/api/auth", protectedAuthRoutes); // me/preferences
 
 // DB connect
 mongoose
