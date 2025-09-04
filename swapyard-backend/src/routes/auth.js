@@ -53,5 +53,45 @@ router.post("/signup", async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 });
+// POST /api/auth/login
+router.post("/login", async (req, res) => {
+  try {
+    const { email, phone, password } = req.body;
+
+    if ((!email && !phone) || !password) {
+      return res.status(400).json({ error: "Email/phone and password required" });
+    }
+
+    // Find user by email or phone
+    const user = await User.findOne({
+      $or: [{ email }, { phone }],
+    });
+
+    if (!user) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+
+    // Compare password
+    const isMatch = await bcrypt.compare(password, user.passwordHash);
+    if (!isMatch) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+
+    // Respond with user data (you could also create a JWT here)
+    res.json({
+      message: "Login successful",
+      user: {
+        id: user._id,
+        email: user.email,
+        phone: user.phone,
+        name: user.name,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
 
 module.exports = router;
