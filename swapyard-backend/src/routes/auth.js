@@ -1,6 +1,7 @@
 // routes/auth.js
 const express = require("express");
 const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");   // ✅ NEW
 const User = require("../models/User");
 
 const router = express.Router();
@@ -53,6 +54,7 @@ router.post("/signup", async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 });
+
 // POST /api/auth/login
 router.post("/login", async (req, res) => {
   try {
@@ -77,9 +79,16 @@ router.post("/login", async (req, res) => {
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
-    // Respond with user data (you could also create a JWT here)
+    // ✅ Generate JWT token
+    const token = jwt.sign(
+      { id: user._id }, 
+      process.env.JWT_SECRET || "defaultsecret", 
+      { expiresIn: "7d" }
+    );
+
     res.json({
       message: "Login successful",
+      token,  // ✅ send token to client
       user: {
         id: user._id,
         email: user.email,
@@ -92,6 +101,5 @@ router.post("/login", async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 });
-
 
 module.exports = router;
