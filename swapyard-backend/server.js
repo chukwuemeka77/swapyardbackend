@@ -3,8 +3,8 @@ const cors = require("cors");
 const mongoose = require("mongoose");
 require("dotenv").config();
 
-const authRoutes = require("./routes/auth"); // 👈 signup route file
-const protectedAuthRoutes = require("./middleware/auth"); // 👈 /me, /preferences
+const authRoutes = require("./src/routes/auth"); // 👈 signup route file
+const protectedAuthRoutes = require("./src/middleware/auth"); // 👈 /me, /preferences
 
 const app = express();
 
