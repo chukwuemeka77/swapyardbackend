@@ -1,68 +1,16 @@
-// routes/auth.js
+// auth.js (Express Router example)
 const express = require("express");
-const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");   // ✅ NEW
-const User = require("../models/User");
-
+const jwt = require("jsonwebtoken");
+const bcrypt = require("bcryptjs"); // if you're hashing passwords
+const User = require("./models/User"); // your mongoose/sequelize User model
 const router = express.Router();
 
-// POST /api/auth/signup
-router.post("/signup", async (req, res) => {
-  try {
-    const { email, phone, password, name } = req.body;
+const JWT_SECRET = process.env.JWT_SECRET || "supersecret"; // keep safe in .env
 
-    if (!email && !phone) {
-      return res.status(400).json({ error: "Email or phone is required" });
-    }
-    if (!password) {
-      return res.status(400).json({ error: "Password is required" });
-    }
-
-    // Check if user already exists
-    const existingUser = await User.findOne({
-      $or: [{ email }, { phone }],
-    });
-    if (existingUser) {
-      return res.status(400).json({ error: "User already exists" });
-    }
-
-    // Hash password
-    const salt = await bcrypt.genSalt(10);
-    const passwordHash = await bcrypt.hash(password, salt);
-
-    // Create new user
-    const user = new User({
-      email,
-      phone,
-      passwordHash,
-      name,
-    });
-
-    await user.save();
-
-    res.status(201).json({
-      message: "User created successfully",
-      user: {
-        id: user._id,
-        email: user.email,
-        phone: user.phone,
-        name: user.name,
-      },
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Server error" });
-  }
-});
-
-// POST /api/auth/login
+// POST /login
 router.post("/login", async (req, res) => {
   try {
     const { email, phone, password } = req.body;
-
-    if ((!email && !phone) || !password) {
-      return res.status(400).json({ error: "Email/phone and password required" });
-    }
 
     // Find user by email or phone
     const user = await User.findOne({
@@ -70,30 +18,30 @@ router.post("/login", async (req, res) => {
     });
 
     if (!user) {
+      return res.status(400).json({ error: "User not found" });
+    }
+
+    // Validate password
+    const validPassword = await bcrypt.compare(password, user.password);
+    if (!validPassword) {
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
-    // Compare password
-    const isMatch = await bcrypt.compare(password, user.passwordHash);
-    if (!isMatch) {
-      return res.status(401).json({ error: "Invalid credentials" });
-    }
-
-    // ✅ Generate JWT token
+    // Create JWT token
     const token = jwt.sign(
-      { id: user._id }, 
-      process.env.JWT_SECRET || "defaultsecret", 
-      { expiresIn: "7d" }
+      { id: user._id, email: user.email }, // payload
+      JWT_SECRET,
+      { expiresIn: "7d" } // token expiry
     );
 
+    // Send response
     res.json({
-      message: "Login successful",
-      token,  // ✅ send token to client
+      token,
       user: {
         id: user._id,
+        name: user.name,
         email: user.email,
         phone: user.phone,
-        name: user.name,
       },
     });
   } catch (err) {
@@ -101,29 +49,6 @@ router.post("/login", async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 });
-const authMiddleware = require("../middleware/authMiddleware");
-
-// GET /api/auth/me
-router.get("/me", authMiddleware, async (req, res) => {
-  try {
-    const user = await User.findById(req.user.id).select("-passwordHash");
-    if (!user) return res.status(404).json({ error: "User not found" });
-
-    res.json({
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        balance: user.balance || 0,   // ✅ if not in schema, will default
-        kycTier: user.kycTier || "Basic",
-      },
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Server error" });
-  }
-});
-
 
 module.exports = router;
+
