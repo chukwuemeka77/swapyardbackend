@@ -1,33 +1,34 @@
-// server.js
 const express = require("express");
 const cors = require("cors");
 const mongoose = require("mongoose");
 require("dotenv").config();
-
 const helmet = require("helmet");
+
 const app = express();
 
+// Middleware
 app.use(
   helmet.contentSecurityPolicy({
     directives: {
       defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "https://cdn.jsdelivr.net"],   // ✅ allow bootstrap icons css
-      fontSrc: ["'self'", "https://cdn.jsdelivr.net"],    // ✅ allow bootstrap icons fonts
+      styleSrc: ["'self'", "https://cdn.jsdelivr.net"], 
+      fontSrc: ["'self'", "https://cdn.jsdelivr.net"],  
     },
   })
 );
 
-const authRoutes = require("./src/routes/auth");   // 👈 adjust path
-const protectedAuthRoutes = require("./src/middleware/auth");
-
-
-// Middleware
 app.use(cors());
 app.use(express.json());
 
 // Routes
-app.use("/api/auth", authRoutes);          // signup/login
-app.use("/api/auth", protectedAuthRoutes); // me/preferences
+const authRoutes = require("./src/routes/auth");
+app.use("/api/auth", authRoutes);
+
+// Example: protected route
+const authMiddleware = require("./src/middleware/auth");
+app.get("/api/auth/me", authMiddleware, (req, res) => {
+  res.json({ user: req.user });
+});
 
 // DB connect
 mongoose
