@@ -9,15 +9,15 @@ const helmet = require("helmet");
 const app = express();
 
 // ===== Middleware =====
-app.use(
-  helmet.contentSecurityPolicy({
-    directives: {
-      defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "https://cdn.jsdelivr.net"], // allow bootstrap icons
-      fontSrc: ["'self'", "https://cdn.jsdelivr.net"],  // allow fonts
-    },
-  })
-);
+helmet.contentSecurityPolicy({
+  directives: {
+    defaultSrc: ["'self'"],
+    scriptSrc: ["'self'", "https://cdn.tailwindcss.com"],
+    styleSrc: ["'self'", "https://cdn.jsdelivr.net"],
+    fontSrc: ["'self'", "https://cdn.jsdelivr.net"],
+  },
+});
+
 
 app.use(cors());
 app.use(express.json());
