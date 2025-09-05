@@ -3,6 +3,7 @@ const express = require("express");
 const cors = require("cors");
 const mongoose = require("mongoose");
 require("dotenv").config();
+const app = express();
 
 const helmet = require("helmet");
 
@@ -19,7 +20,6 @@ app.use(
 const authRoutes = require("./src/routes/auth");   // 👈 adjust path
 const protectedAuthRoutes = require("./src/middleware/auth");
 
-const app = express();
 
 // Middleware
 app.use(cors());
