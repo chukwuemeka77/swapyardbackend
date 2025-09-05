@@ -2,7 +2,7 @@
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs"); // if you're hashing passwords
-const User = require("./models/User"); // your mongoose/sequelize User model
+const User = require("../models/User"); // your mongoose/sequelize User model
 const router = express.Router();
 
 const JWT_SECRET = process.env.JWT_SECRET || "supersecret"; // keep safe in .env
