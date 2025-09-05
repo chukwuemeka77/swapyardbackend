@@ -16,8 +16,8 @@ app.use(
   })
 );
 
-const authRoutes = require("./src/routes/auth");   // 👈 adjust path
-const protectedAuthRoutes = require("./src/middleware/auth");
+const authRoutes = require("./src/routes/auth.js");   // 👈 adjust path
+const protectedAuthRoutes = require("./src/middleware/authMiddleware.js");
 
 const app = express();
 
