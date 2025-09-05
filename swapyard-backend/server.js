@@ -23,8 +23,8 @@ app.use(cors());
 app.use(express.json());
 
 // ===== Routes =====
-const authRoutes = require("./src/routes/auth");
-const authMiddleware = require("./src/middleware/auth");
+const authRoutes = require("./src/routes/auth.js");
+const authMiddleware = require("./src/middleware/auth.js");
 
 app.use("/api/auth", authRoutes);
 app.get("/api/auth/me", authMiddleware, (req, res) => {
