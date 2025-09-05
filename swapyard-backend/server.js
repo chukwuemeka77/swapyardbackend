@@ -4,6 +4,18 @@ const cors = require("cors");
 const mongoose = require("mongoose");
 require("dotenv").config();
 
+const helmet = require("helmet");
+
+app.use(
+  helmet.contentSecurityPolicy({
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "https://cdn.jsdelivr.net"],   // ✅ allow bootstrap icons css
+      fontSrc: ["'self'", "https://cdn.jsdelivr.net"],    // ✅ allow bootstrap icons fonts
+    },
+  })
+);
+
 const authRoutes = require("./src/routes/auth");   // 👈 adjust path
 const protectedAuthRoutes = require("./src/middleware/auth");
 
