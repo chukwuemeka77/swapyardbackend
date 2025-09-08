@@ -24,12 +24,13 @@ router.post("/signup", async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // Create new user
-    const newUser = new User({
-      name,
-      email,
-      phone,
-      password: hashedPassword,
-    });
+   const newUser = new User({
+  name,
+  email,
+  phone,
+  passwordHash: hashedPassword,  // ✅ matches your schema
+});
+
     await newUser.save();
 
     // Generate token
