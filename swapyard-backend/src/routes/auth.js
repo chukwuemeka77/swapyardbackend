@@ -6,7 +6,53 @@ const User = require("../models/User"); // your mongoose/sequelize User model
 const router = express.Router();
 
 const JWT_SECRET = process.env.JWT_SECRET || "supersecret"; // keep safe in .env
+// ✅ POST /signup
+router.post("/signup", async (req, res) => {
+  try {
+    const { name, email, phone, password } = req.body;
 
+    // Check if user already exists
+    const existingUser = await User.findOne({
+      $or: [{ email }, { phone }],
+    });
+
+    if (existingUser) {
+      return res.status(400).json({ error: "User already exists" });
+    }
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create new user
+    const newUser = new User({
+      name,
+      email,
+      phone,
+      password: hashedPassword,
+    });
+    await newUser.save();
+
+    // Generate token
+    const token = jwt.sign(
+      { id: newUser._id, email: newUser.email },
+      JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    res.status(201).json({
+      token,
+      user: {
+        id: newUser._id,
+        name: newUser.name,
+        email: newUser.email,
+        phone: newUser.phone,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
 // POST /login
 router.post("/login", async (req, res) => {
   try {
