@@ -6,6 +6,7 @@ require("dotenv").config();
 
 // ===== Initialize app FIRST =====
 const app = express();
+const countryRoutes = require("./src/routes/countries");
 
 // ===== Middleware =====
 app.use(cors());
@@ -26,6 +27,7 @@ app.use(
 const authRoutes = require("./src/routes/auth.js");
 const userRoutes = require("./src/routes/user.js");
 const authMiddleware = require("./src/middleware/auth.js");
+app.use("/api/countries", countryRoutes);// countries selection
 
 app.use("/api/auth", authRoutes);   // signup, login
 app.use("/api/user", userRoutes);   // profile, preferences
