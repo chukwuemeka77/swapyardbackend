@@ -10,41 +10,33 @@ const JWT_SECRET = process.env.JWT_SECRET || "supersecret"; // keep safe in .env
 // POST /login
 router.post("/login", async (req, res) => {
   try {
-    const { email, phone, password } = req.body;
+    const { email, password } = req.body;
+    
+    if (!email || !password) {
+      return res.status(400).json({ message: "Email and password are required" });
+    }
 
-    // Find user by email or phone
-    const user = await User.findOne({
-      $or: [{ email }, { phone }],
-    });
-
+    const user = await User.findOne({ email });
     if (!user) {
-      return res.status(400).json({ error: "User not found" });
+      return res.status(404).json({ message: "User not found" });
     }
 
-    // Validate password
-    const validPassword = await bcrypt.compare(password, user.password);
-    if (!validPassword) {
-      return res.status(401).json({ error: "Invalid credentials" });
+    if (!user.password) {
+      return res.status(500).json({ message: "User password is missing in DB" });
     }
 
-    // Create JWT token
-    const token = jwt.sign(
-      { id: user._id, email: user.email }, // payload
-      JWT_SECRET,
-      { expiresIn: "7d" } // token expiry
-    );
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(400).json({ message: "Invalid credentials" });
+    }
 
-    // Send response
-    res.json({
-      token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-      },
-    });
+    res.status(200).json({ message: "Login successful" });
   } catch (err) {
+    console.error("Login error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+ catch (err) {
     console.error(err);
     res.status(500).json({ error: "Server error" });
   }
