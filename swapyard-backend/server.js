@@ -22,9 +22,10 @@ helmet.contentSecurityPolicy({
 
 // ===== Routes =====
 const authRoutes = require("./src/routes/auth.js");
+app.use("/api/auth", authRoutes);
+
 const countriesRoutes = require("./src/routes/countries.js");
 
-app.use("/api/auth", authRoutes);
 app.use("/api/countries", countriesRoutes);
 
 // ===== Database =====
