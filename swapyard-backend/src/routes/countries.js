@@ -1,21 +1,19 @@
 const express = require("express");
-const fetch = require("node-fetch"); // or axios
 const router = express.Router();
+const fetch = require("node-fetch");
 
 router.get("/", async (req, res) => {
   try {
-    const response = await fetch("https://sandboxapi.rapyd.net/v1/countries", {
-      method: "GET",
+    const response = await fetch("https://sandboxapi.rapyd.net/v1/data/countries", {
       headers: {
-        "Authorization": `Bearer ${process.env.RAPYD_API_KEY}`,
         "Content-Type": "application/json",
+        "access_key": process.env.RAPYD_API_KEY, // secret in backend
       },
     });
-
     const data = await response.json();
-    res.json(data); // send the country list to frontend
+    res.json(data);
   } catch (err) {
-    console.error("Error fetching countries:", err);
+    console.error("Countries fetch error:", err);
     res.status(500).json({ error: "Failed to fetch countries" });
   }
 });
