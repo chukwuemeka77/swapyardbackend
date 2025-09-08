@@ -1,13 +1,13 @@
 const express = require("express");
 const router = express.Router();
 
-// Example: fetch Rapyd-supported countries from Rapyd API
+// Using Node 18+ fetch (no node-fetch needed)
 router.get("/", async (req, res) => {
   try {
-    const RAPYD_API_KEY = process.env.RAPYD_API_KEY; // keep in .env
+    const RAPYD_API_KEY = process.env.RAPYD_API_KEY;
     const RAPYD_API_SECRET = process.env.RAPYD_API_SECRET;
 
-    // Using built-in fetch (Node 18+)
+    // Call Rapyd API
     const response = await fetch("https://sandboxapi.rapyd.net/v1/data/countries", {
       method: "GET",
       headers: {
@@ -17,12 +17,20 @@ router.get("/", async (req, res) => {
       }
     });
 
-    const data = await response.json();
-    res.json(data);
+    if (!response.ok) {
+      console.error("Rapyd countries fetch failed:", response.status, await response.text());
+      return res.status(500).json({ error: "Failed to fetch countries" });
+    }
+
+    const rapydData = await response.json();
+
+    // Rapyd wraps countries in rapydData.data
+    res.json({ countries: rapydData.data || [] });
   } catch (err) {
-    console.error("Error fetching countries:", err);
-    res.status(500).json({ error: "Failed to fetch countries" });
+    console.error("Error in /countries route:", err);
+    res.status(500).json({ error: "Server error fetching countries" });
   }
 });
 
 module.exports = router;
+
