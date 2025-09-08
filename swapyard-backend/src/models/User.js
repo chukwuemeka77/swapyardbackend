@@ -1,20 +1,87 @@
-const mongoose = require('mongoose');
-const { Schema } = mongoose;
+const express = require("express");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+const User = require("../models/User"); // adjust path if needed
 
-const userSchema = new Schema(
-  {
-    email: { type: String, lowercase: true, trim: true, index: true, sparse: true },
-    phone: { type: String, trim: true, index: true, sparse: true },
-    passwordHash: { type: String, required: true },
-    name: { type: String, default: '' },
-    profilePicture: { type: String, default: '' },
-    balance: { type: Number, default: 0 },
-    kycTier: { type: String, enum: ['basic', 'verified', 'ultimate'], default: 'basic' },
-    theme: { type: String, enum: ['light', 'dark', 'system'], default: 'dark' },
-    language: { type: String, default: 'en' }
-  },
-  { timestamps: true }
-);
+const router = express.Router();
 
-// Removed duplicate index calls; indexes are already defined inline
-module.exports = mongoose.model('User', userSchema);
+// ==================== SIGNUP ====================
+router.post("/signup", async (req, res) => {
+  try {
+    const { name, email, phone, password } = req.body;
+
+    if (!name || !password || (!email && !phone)) {
+      return res.status(400).json({ error: "Name, password and email/phone are required" });
+    }
+
+    // Check if user already exists
+    const existingUser = await User.findOne({ $or: [{ email }, { phone }] });
+    if (existingUser) {
+      return res.status(400).json({ error: "User already exists" });
+    }
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create new user
+    const newUser = new User({
+      name,
+      email,
+      phone,
+      passwordHash: hashedPassword, // ✅ store hash only
+    });
+
+    await newUser.save();
+
+    res.status(201).json({ message: "Signup successful! Please login." });
+  } catch (err) {
+    console.error("Signup error:", err);
+    res.status(500).json({ error: "Server error during signup" });
+  }
+});
+
+// ==================== LOGIN ====================
+router.post("/login", async (req, res) => {
+  try {
+    const { email, phone, password } = req.body;
+
+    if ((!email && !phone) || !password) {
+      return res.status(400).json({ error: "Email/phone and password are required" });
+    }
+
+    // Find user
+    const user = await User.findOne({ $or: [{ email }, { phone }] });
+    if (!user) {
+      return res.status(400).json({ error: "User not found" });
+    }
+
+    // Compare passwords
+    const validPassword = await bcrypt.compare(password, user.passwordHash);
+    if (!validPassword) {
+      return res.status(400).json({ error: "Invalid credentials" });
+    }
+
+    // Generate JWT
+    const token = jwt.sign(
+      { id: user._id },
+      process.env.JWT_SECRET || "defaultsecret",
+      { expiresIn: "7d" }
+    );
+
+    res.status(200).json({
+      message: "Login successful",
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+      },
+    });
+  } catch (err) {
+    console.error("Login error:", err);
+    res.status(500).json({ error: "Server error during login" });
+  }
+});
+
+module.exports = router;
