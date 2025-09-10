@@ -1,11 +1,39 @@
 // routes/rapydWebhook.js
 const express = require("express");
+const crypto = require("crypto");
 const router = express.Router();
 const Transaction = require("../models/Transaction");
 const WebhookLog = require("../models/WebhookLog");
 
+const RAPYD_SECRET_KEY = process.env.RAPYD_SECRET_KEY; // from Rapyd Dashboard
+
+// Middleware: verify Rapyd HMAC signature
+function verifyRapydSignature(req, res, next) {
+  try {
+    const signature = req.headers["signature"]; // Rapyd sends this
+    if (!signature) {
+      return res.status(401).json({ error: "Missing Rapyd signature" });
+    }
+
+    const rawBody = JSON.stringify(req.body);
+    const hmac = crypto
+      .createHmac("sha256", RAPYD_SECRET_KEY)
+      .update(rawBody, "utf8")
+      .digest("hex");
+
+    if (hmac !== signature) {
+      return res.status(401).json({ error: "Invalid Rapyd signature" });
+    }
+
+    next();
+  } catch (err) {
+    console.error("Signature verification error:", err);
+    return res.status(401).json({ error: "Rapyd signature verification failed" });
+  }
+}
+
 // ✅ Handle Rapyd webhooks
-router.post("/", async (req, res) => {
+router.post("/", verifyRapydSignature, async (req, res) => {
   const event = req.body;
 
   let webhookLog;
@@ -98,3 +126,6 @@ function mapRapydStatus(eventType) {
 }
 
 module.exports = router;
+
+    
+
