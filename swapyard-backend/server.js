@@ -10,15 +10,19 @@ const app = express();
 // ===== Middleware =====
 app.use(cors());
 app.use(express.json()); // default JSON parser for most routes
+app.use(helmet()); // Mount helmet
 
-helmet.contentSecurityPolicy({
-  directives: {
-    defaultSrc: ["'self'"],
-    scriptSrc: ["'self'"],
-    styleSrc: ["'self'", "https://cdn.jsdelivr.net"],
-    fontSrc: ["'self'", "https://cdn.jsdelivr.net"],
-  },
-});
+// Optional custom CSP
+app.use(
+  helmet.contentSecurityPolicy({
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "https://cdn.jsdelivr.net"],
+      fontSrc: ["'self'", "https://cdn.jsdelivr.net"],
+    },
+  })
+);
 
 // ===== Routes =====
 const authRoutes = require("./src/routes/auth.js");
@@ -30,30 +34,23 @@ app.use("/api/countries", countriesRoutes);
 // ✅ Health-check route
 app.get("/api/health", (req, res) => {
   const dbState = mongoose.connection.readyState;
-  let dbStatus;
+  const states = ["disconnected", "connected", "connecting", "disconnecting"];
+  const dbStatus = states[dbState] || "unknown";
 
-  switch (dbState) {
-    case 0:
-      dbStatus = "disconnected";
-      break;
-    case 1:
-      dbStatus = "connected";
-      break;
-    case 2:
-      dbStatus = "connecting";
-      break;
-    case 3:
-      dbStatus = "disconnecting";
-      break;
-    default:
-      dbStatus = "unknown";
+  const health = {
+    status: dbStatus === "connected" ? "ok" : "error",
+    message: "Server health check",
+    db: dbStatus,
+    uptime: `${Math.floor(process.uptime())}s`,
+    env: process.env.NODE_ENV || "development",
+  };
+
+  // If you want Render to fail health check when DB is down:
+  if (dbStatus !== "connected") {
+    return res.status(500).json(health);
   }
 
-  res.json({
-    status: "ok",
-    message: "Server is running",
-    db: dbStatus,
-  });
+  res.json(health);
 });
 
 // ✅ Use express.raw ONLY for Rapyd webhooks
@@ -72,4 +69,5 @@ mongoose
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
 
