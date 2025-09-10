@@ -1,87 +1,47 @@
-const express = require("express");
-const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
-const User = require("../models/User"); // adjust path if needed
+  // src/models/User.js
+const mongoose = require("mongoose");
 
-const router = express.Router();
+const paymentMethodSchema = new mongoose.Schema({
+  type: { type: String, enum: ["card", "bank_account", "crypto"], required: true },
+  provider: String,         // e.g., VISA, MasterCard, Bank name
+  last4: String,            // last 4 digits of card/account
+  token: String,            // payment method token
+  expiry: String,           // MM/YY for cards
+  isDefault: { type: Boolean, default: false }
+}, { _id: false });
 
-// ==================== SIGNUP ====================
-router.post("/signup", async (req, res) => {
-  try {
-    const { name, email, phone, password } = req.body;
+const walletBalanceSchema = new mongoose.Schema({
+  currency: { type: String, required: true }, // e.g., "USD", "NGN"
+  amount: { type: Number, default: 0 }
+}, { _id: false });
 
-    if (!name || !password || (!email && !phone)) {
-      return res.status(400).json({ error: "Name, password and email/phone are required" });
-    }
+const userSchema = new mongoose.Schema({
+  // Basic Identity
+  name: { type: String, required: true },
+  email: { type: String, unique: true, sparse: true },
+  phone: { type: String, unique: true, sparse: true },
+  passwordHash: { type: String, required: true },
 
-    // Check if user already exists
-    const existingUser = await User.findOne({ $or: [{ email }, { phone }] });
-    if (existingUser) {
-      return res.status(400).json({ error: "User already exists" });
-    }
+  // Wallet
+  balances: [walletBalanceSchema],          // ✅ multi-currency wallet
+  defaultCurrency: { type: String, default: "USD" },
+  defaultCountry: { type: String, default: "US" },
 
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
+  // Payment Methods
+  paymentMethods: [paymentMethodSchema],    // ✅ saved cards/banks/crypto
 
-    // Create new user
-    const newUser = new User({
-      name,
-      email,
-      phone,
-      passwordHash: hashedPassword, // ✅ store hash only
-    });
+  // KYC / Compliance
+  kycVerified: { type: Boolean, default: false },
+  kycLevel: { type: String, enum: ["basic", "advanced"], default: "basic" },
+  documents: [{
+    type: { type: String }, // e.g., passport, ID_card
+    url: String,
+    verified: { type: Boolean, default: false }
+  }],
 
-    await newUser.save();
+  // Transactions (references)
+  transactions: [{ type: mongoose.Schema.Types.ObjectId, ref: "Transaction" }],
 
-    res.status(201).json({ message: "Signup successful! Please login." });
-  } catch (err) {
-    console.error("Signup error:", err);
-    res.status(500).json({ error: "Server error during signup" });
-  }
-});
+}, { timestamps: true });
 
-// ==================== LOGIN ====================
-router.post("/login", async (req, res) => {
-  try {
-    const { email, phone, password } = req.body;
-
-    if ((!email && !phone) || !password) {
-      return res.status(400).json({ error: "Email/phone and password are required" });
-    }
-
-    // Find user
-    const user = await User.findOne({ $or: [{ email }, { phone }] });
-    if (!user) {
-      return res.status(400).json({ error: "User not found" });
-    }
-
-    // Compare passwords
-    const validPassword = await bcrypt.compare(password, user.passwordHash);
-    if (!validPassword) {
-      return res.status(400).json({ error: "Invalid credentials" });
-    }
-
-    // Generate JWT
-    const token = jwt.sign(
-      { id: user._id },
-      process.env.JWT_SECRET || "defaultsecret",
-      { expiresIn: "7d" }
-    );
-
-    res.status(200).json({
-      message: "Login successful",
-      token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-      },
-    });
-  } catch (err) {
-    console.error("Login error:", err);
-    res.status(500).json({ error: "Server error during login" });
-  }
-});
-
-module.exports = router;
+module.exports = mongoose.model("User", userSchema);
