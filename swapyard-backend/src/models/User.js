@@ -1,4 +1,4 @@
-  // src/models/User.js
+// src/models/User.js
 const mongoose = require("mongoose");
 
 const paymentMethodSchema = new mongoose.Schema({
