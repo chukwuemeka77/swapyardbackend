@@ -7,7 +7,7 @@ const WebhookLog = require("../models/WebhookLog");
 
 const RAPYD_SECRET_KEY = process.env.RAPYD_SECRET_KEY; // from Rapyd Dashboard
 
-// Middleware: verify Rapyd HMAC signature
+// ===== Middleware: verify Rapyd HMAC signature =====
 function verifyRapydSignature(req, res, next) {
   try {
     const signature = req.headers["signature"]; // Rapyd sends this
@@ -15,14 +15,23 @@ function verifyRapydSignature(req, res, next) {
       return res.status(401).json({ error: "Missing Rapyd signature" });
     }
 
-const rawBody = req.rawBody;
+    // Use Buffer (since express.raw is enabled for this route in server.js)
+    const rawBody = req.body instanceof Buffer
+      ? req.body
+      : Buffer.from(JSON.stringify(req.body));
+
     const hmac = crypto
       .createHmac("sha256", RAPYD_SECRET_KEY)
-      .update(rawBody, "utf8")
+      .update(rawBody)
       .digest("hex");
 
     if (hmac !== signature) {
       return res.status(401).json({ error: "Invalid Rapyd signature" });
+    }
+
+    // Parse JSON so downstream handlers can use it normally
+    if (req.body instanceof Buffer) {
+      req.body = JSON.parse(rawBody.toString("utf8"));
     }
 
     next();
@@ -32,7 +41,7 @@ const rawBody = req.rawBody;
   }
 }
 
-// ✅ Handle Rapyd webhooks
+// ===== Handle Rapyd webhooks =====
 router.post("/", verifyRapydSignature, async (req, res) => {
   const event = req.body;
 
@@ -126,6 +135,3 @@ function mapRapydStatus(eventType) {
 }
 
 module.exports = router;
-
-    
-
