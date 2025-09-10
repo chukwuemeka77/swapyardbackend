@@ -9,7 +9,7 @@ const app = express();
 
 // ===== Middleware =====
 app.use(cors());
-app.use(express.json()); // default JSON parser for all routes
+app.use(express.json()); // default JSON parser for most routes
 
 helmet.contentSecurityPolicy({
   directives: {
@@ -29,7 +29,31 @@ app.use("/api/countries", countriesRoutes);
 
 // ✅ Health-check route
 app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", message: "Server is running" });
+  const dbState = mongoose.connection.readyState;
+  let dbStatus;
+
+  switch (dbState) {
+    case 0:
+      dbStatus = "disconnected";
+      break;
+    case 1:
+      dbStatus = "connected";
+      break;
+    case 2:
+      dbStatus = "connecting";
+      break;
+    case 3:
+      dbStatus = "disconnecting";
+      break;
+    default:
+      dbStatus = "unknown";
+  }
+
+  res.json({
+    status: "ok",
+    message: "Server is running",
+    db: dbStatus,
+  });
 });
 
 // ✅ Use express.raw ONLY for Rapyd webhooks
