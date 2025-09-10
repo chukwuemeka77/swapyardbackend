@@ -32,7 +32,10 @@ const transactionSchema = new mongoose.Schema(
     description: String,
 
     // Optional metadata
-    metadata: { type: mongoose.Schema.Types.Mixed }
+    metadata: { type: mongoose.Schema.Types.Mixed },
+
+    // ✅ Store the raw Rapyd webhook event for auditing/debugging
+    rawRapydEvent: { type: mongoose.Schema.Types.Mixed }
   },
   { timestamps: true }
 );
