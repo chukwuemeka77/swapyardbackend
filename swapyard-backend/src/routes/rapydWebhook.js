@@ -1,105 +1,100 @@
 // routes/rapydWebhook.js
 const express = require("express");
-const crypto = require("crypto");
-const WalletService = require("../services/WalletService");
-const User = require("../models/User");
-
 const router = express.Router();
+const Transaction = require("../models/Transaction");
+const WebhookLog = require("../models/WebhookLog");
 
-/**
- * Verify Rapyd webhook signature
- */
-function verifySignature(req) {
-  try {
-    const secret = process.env.RAPYD_SECRET || "rapyd_secret"; // set in .env
-    const body = JSON.stringify(req.body);
-    const signature = req.headers["signature"];
-
-    const hash = crypto
-      .createHmac("sha256", secret)
-      .update(body)
-      .digest("hex");
-
-    return hash === signature;
-  } catch (err) {
-    console.error("Signature verification failed:", err.message);
-    return false;
-  }
-}
-
-/**
- * Handle Rapyd Webhook Events
- */
+// ✅ Handle Rapyd webhooks
 router.post("/", async (req, res) => {
+  const event = req.body;
+
+  let webhookLog;
   try {
-    if (!verifySignature(req)) {
-      return res.status(401).json({ error: "Invalid signature" });
+    // 1. Save EVERY webhook (raw payload)
+    webhookLog = new WebhookLog({
+      eventType: event.type || "unknown",
+      raw: event,
+      status: "received",
+    });
+    await webhookLog.save();
+
+    // 2. Process only transaction-related events
+    if (
+      event.type &&
+      [
+        "payment.completed",
+        "payment.failed",
+        "transfer.completed",
+        "transfer.failed",
+        "wallet.transaction",
+      ].includes(event.type)
+    ) {
+      const data = event.data || {};
+
+      // Map Rapyd payload to our Transaction model
+      const txFields = {
+        referenceId: data.id, // Rapyd’s unique ID
+        type: mapRapydEventToType(event.type),
+        amount: data.amount,
+        currency: data.currency,
+        status: mapRapydStatus(event.type),
+        description: data.description || `Rapyd ${event.type}`,
+        metadata: data,
+      };
+
+      // 3. Upsert Transaction (avoid duplicates with referenceId)
+      let transaction = await Transaction.findOneAndUpdate(
+        { referenceId: data.id },
+        txFields,
+        { new: true, upsert: true }
+      );
+
+      // 4. Link webhookLog → transaction
+      webhookLog.transaction = transaction._id;
+      webhookLog.status = "processed";
+      await webhookLog.save();
+    } else {
+      // Not a transaction-related event
+      webhookLog.status = "ignored";
+      await webhookLog.save();
     }
 
-    const event = req.body;
-
-    console.log("📩 Rapyd Webhook Received:", event.type);
-
-    const { type, data } = event;
-
-    // Example mapping - expand as needed
-    switch (type) {
-      case "payment.completed": {
-        const user = await User.findOne({ email: data.customer_email });
-        if (!user) break;
-
-        await WalletService.deposit(user._id, data.amount, data.currency, {
-          rapydPaymentId: data.id,
-        });
-        break;
-      }
-
-      case "payout.completed": {
-        const user = await User.findOne({ email: data.customer_email });
-        if (!user) break;
-
-        await WalletService.withdraw(user._id, data.amount, data.currency, {
-          rapydPayoutId: data.id,
-        });
-        break;
-      }
-
-      case "transfer.completed": {
-        const fromUser = await User.findOne({ email: data.source_customer_email });
-        const toUser = await User.findOne({ email: data.destination_customer_email });
-        if (!fromUser || !toUser) break;
-
-        await WalletService.transfer(fromUser._id, toUser._id, data.amount, data.currency, {
-          rapydTransferId: data.id,
-        });
-        break;
-      }
-
-      case "fx.conversion.completed": {
-        const user = await User.findOne({ email: data.customer_email });
-        if (!user) break;
-
-        await WalletService.fxExchange(
-          user._id,
-          data.amount,
-          data.from_currency,
-          data.to_currency,
-          data.fx_rate,
-          { rapydFxId: data.id }
-        );
-        break;
-      }
-
-      default:
-        console.log("⚠️ Unhandled Rapyd event:", type);
-    }
-
-    res.status(200).json({ status: "success" });
+    res.status(200).json({ message: "Webhook received" });
   } catch (err) {
-    console.error("⚠️ Webhook processing error:", err.message);
-    res.status(500).json({ error: "Webhook handling failed" });
+    console.error("Rapyd webhook processing error:", err);
+
+    if (webhookLog) {
+      webhookLog.status = "failed";
+      webhookLog.errorMessage = err.message;
+      await webhookLog.save();
+    }
+
+    res.status(500).json({ error: "Webhook processing failed" });
   }
 });
 
-module.exports = router;
+// ===== Helpers =====
+function mapRapydEventToType(eventType) {
+  switch (eventType) {
+    case "payment.completed":
+      return "deposit";
+    case "payment.failed":
+      return "deposit";
+    case "transfer.completed":
+      return "transfer";
+    case "transfer.failed":
+      return "transfer";
+    case "wallet.transaction":
+      return "payment"; // general wallet txn
+    default:
+      return "payment";
+  }
+}
 
+function mapRapydStatus(eventType) {
+  if (eventType.includes("failed")) return "failed";
+  if (eventType.includes("completed")) return "success";
+  return "pending";
+}
+
+module.exports = router;
