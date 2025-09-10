@@ -15,7 +15,7 @@ function verifyRapydSignature(req, res, next) {
       return res.status(401).json({ error: "Missing Rapyd signature" });
     }
 
-    const rawBody = JSON.stringify(req.body);
+const rawBody = req.rawBody;
     const hmac = crypto
       .createHmac("sha256", RAPYD_SECRET_KEY)
       .update(rawBody, "utf8")
