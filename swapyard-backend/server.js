@@ -28,6 +28,8 @@ const countriesRoutes = require("./src/routes/countries.js");
 
 app.use("/api/countries", countriesRoutes);
 
+const rapydWebhookRoutes = require("./src/routes/rapydWebhook");
+app.use("/api/rapyd/webhook", rapydWebhookRoutes);
 // ===== Database =====
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB connected"))
