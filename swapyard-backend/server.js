@@ -27,6 +27,11 @@ app.use("/api/auth", authRoutes);
 const countriesRoutes = require("./src/routes/countries.js");
 app.use("/api/countries", countriesRoutes);
 
+// ✅ Health-check route
+app.get("/api/health", (req, res) => {
+  res.json({ status: "ok", message: "Server is running" });
+});
+
 // ✅ Use express.raw ONLY for Rapyd webhooks
 const rapydWebhookRoutes = require("./src/routes/rapydWebhook");
 app.use(
