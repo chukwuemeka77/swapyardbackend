@@ -1,30 +1,36 @@
-const mongoose = require('mongoose');
-const { Schema } = mongoose;
+// src/models/Transaction.js
+const mongoose = require("mongoose");
 
-const transactionSchema = new Schema(
-  {
-    userId: { type: Schema.Types.ObjectId, ref: 'User', index: true },
-    type: { type: String, enum: ['payment', 'swap'], required: true },
-    status: { type: String, enum: ['pending', 'completed', 'failed'], default: 'pending' },
+const transactionSchema = new mongoose.Schema({
+  user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
 
-    sourceAmount: Number,
-    sourceCurrency: String,
-    targetAmount: Number,
-    targetCurrency: String,
-
-    effectiveRate: Number,
-    baseRate: Number,
-
-    counterpartyName: String,
-    counterpartyAccount: String,
-    counterpartyBank: String,
-
-    provider: { type: String, default: 'rapyd' },
-    providerRef: { type: String, default: '' },
-
-    meta: {}
+  type: {
+    type: String,
+    enum: ["deposit", "withdrawal", "transfer", "payment", "fx_exchange"],
+    required: true
   },
-  { timestamps: true }
-);
 
-module.exports = mongoose.model('Transaction', transactionSchema);
+  amount: { type: Number, required: true },
+  currency: { type: String, required: true }, // e.g., "USD", "NGN"
+
+  // For FX conversions
+  fromCurrency: String,
+  toCurrency: String,
+  exchangeRate: Number,
+
+  // For transfers/payments
+  counterparty: { type: String }, // could be email/phone/userId/walletId
+  referenceId: { type: String, unique: true }, // for idempotency (Rapyd-style)
+  status: {
+    type: String,
+    enum: ["pending", "success", "failed", "reversed"],
+    default: "pending"
+  },
+
+  description: String,
+
+  // Optional metadata for flexibility
+  metadata: { type: mongoose.Schema.Types.Mixed }
+}, { timestamps: true });
+
+module.exports = mongoose.model("Transaction", transactionSchema);
