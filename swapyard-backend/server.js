@@ -9,12 +9,8 @@ const app = express();
 
 // ===== Middleware =====
 app.use(cors());
-app.use(express.json());
+app.use(express.json()); // default JSON parser for all routes
 
-// Capture rawBody specifically for Rapyd webhooks
-app.use("/api/rapyd/webhook", express.raw({ type: "application/json" }));
-
-// CSP example
 helmet.contentSecurityPolicy({
   directives: {
     defaultSrc: ["'self'"],
@@ -31,11 +27,17 @@ app.use("/api/auth", authRoutes);
 const countriesRoutes = require("./src/routes/countries.js");
 app.use("/api/countries", countriesRoutes);
 
+// ✅ Use express.raw ONLY for Rapyd webhooks
 const rapydWebhookRoutes = require("./src/routes/rapydWebhook");
-app.use("/api/rapyd/webhook", rapydWebhookRoutes);
+app.use(
+  "/api/rapyd/webhook",
+  express.raw({ type: "application/json" }), // keep raw body for HMAC verification
+  rapydWebhookRoutes
+);
 
 // ===== Database =====
-mongoose.connect(process.env.MONGO_URI)
+mongoose
+  .connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB connected"))
   .catch((err) => console.error(err));
 
