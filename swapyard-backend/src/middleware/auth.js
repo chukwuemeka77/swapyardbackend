@@ -11,16 +11,12 @@ module.exports = async function auth(req, res, next) {
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
 
-    // ✅ Load full user from DB
     const user = await User.findById(payload.id);
-    if (!user) {
-      return res.status(401).json({ error: "User not found" });
-    }
+    if (!user) return res.status(401).json({ error: "User not found" });
 
-    req.user = user; // full MongoDB user with rapydId, name, email, etc.
+    req.user = user; // full Mongo user, includes rapydId
     next();
   } catch (err) {
     return res.status(401).json({ error: "Invalid token" });
   }
 };
-
