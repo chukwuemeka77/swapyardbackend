@@ -1,31 +1,38 @@
-const router = require('express').Router();
-const auth = require('../middleware/auth');
-const User = require('../models/User');
+// routes/user.js
+const express = require("express");
+const router = express.Router();
+const auth = require("../middleware/auth");
+const { rapydRequest } = require("../utils/rapyd");
 
-router.get('/me', auth, async (req, res) => {
-  const user = await User.findById(req.user.id);
-  if (!user) return res.status(404).json({ error: 'Not found' });
-  res.json({
-    id: user._id,
-    email: user.email,
-    phone: user.phone,
-    name: user.name,
-    balance: user.balance,
-    kycTier: user.kycTier,
-    theme: user.theme,
-    language: user.language,
-    profilePicture: user.profilePicture
-  });
-});
+router.get("/me", auth, async (req, res) => {
+  try {
+    const user = req.user; // from MongoDB
 
-router.patch('/preferences', auth, async (req, res) => {
-  const { theme, language } = req.body;
-  const user = await User.findByIdAndUpdate(
-    req.user.id,
-    { ...(theme ? { theme } : {}), ...(language ? { language } : {}) },
-    { new: true }
-  );
-  res.json({ theme: user.theme, language: user.language });
+    // ✅ Get Rapyd Wallet
+    const walletRes = await rapydRequest("GET", `/user/${user.rapydId}/wallets`);
+    const wallet = walletRes.data[0]; // assume primary wallet
+
+    // ✅ Get Rapyd Transactions
+    const txRes = await rapydRequest("GET", `/wallets/${wallet.id}/transactions`);
+    const transactions = txRes.data;
+
+    res.json({
+      name: user.name,
+      email: user.email,
+      balance: wallet.balance,
+      currency: wallet.currency,
+      transactions: transactions.map(tx => ({
+        id: tx.id,
+        amount: tx.amount,
+        currency: tx.currency,
+        description: tx.description || tx.type,
+        created_at: tx.created_at,
+      })),
+    });
+  } catch (err) {
+    console.error("Error in /me:", err.response?.data || err.message);
+    res.status(500).json({ error: "Failed to load dashboard data" });
+  }
 });
 
 module.exports = router;
