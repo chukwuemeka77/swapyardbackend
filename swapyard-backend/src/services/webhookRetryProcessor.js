@@ -1,70 +1,44 @@
-// services/webhookRetryProcessor.js
-const WebhookLog = require("../models/WebhookLog");
-const Transaction = require("../models/Transaction");
+// src/services/webhookRetryProcessor.js
+const FailedWebhook = require("../models/FailedWebhook");
+const axios = require("axios");
 
-async function processFailedWebhooks(maxRetries = 5) {
-  const failedLogs = await WebhookLog.find({
-    status: "failed",
-    retryCount: { $lt: maxRetries },
-  }).limit(10); // batch to avoid overload
+async function processFailedWebhooks(batchSize = 5) {
+  const now = new Date();
 
-  for (const log of failedLogs) {
+  // Pick a few failed webhooks that are ready for retry
+  const failedWebhooks = await FailedWebhook.find({
+    nextRetryAt: { $lte: now }
+  }).limit(batchSize);
+
+  for (const webhook of failedWebhooks) {
     try {
-      const event = log.rawData || {};
-      const data = event.data || {};
+      console.log(`Retrying webhook ${webhook._id} -> ${webhook.endpoint}`);
 
-      const txFields = {
-        referenceId: data.id,
-        type: mapRapydEventToType(event.type),
-        amount: data.amount,
-        currency: data.currency,
-        status: mapRapydStatus(event.type),
-        description: data.description || `Rapyd ${event.type}`,
-        metadata: data,
-      };
-
-      const transaction = await Transaction.findOneAndUpdate(
-        { referenceId: data.id },
-        txFields,
-        { new: true, upsert: true, setDefaultsOnInsert: true }
+      // Re-send payload to your own API endpoint
+      await axios.post(
+        `${process.env.BASE_URL}${webhook.endpoint}`,
+        webhook.payload,
+        { headers: { "Content-Type": "application/json" } }
       );
 
-      log.relatedTransaction = transaction._id;
-      log.status = "processed";
-      log.errorMessage = null;
-      log.retryCount += 1;
-      await log.save();
-
-      console.log(`✅ Retried webhook ${log._id} successfully`);
+      // ✅ Success → remove from DB
+      await FailedWebhook.findByIdAndDelete(webhook._id);
+      console.log(`Webhook ${webhook._id} processed successfully`);
     } catch (err) {
-      log.retryCount += 1;
-      log.errorMessage = err.message;
-      await log.save();
-      console.error(`❌ Retry failed for webhook ${log._id}:`, err.message);
+      // ❌ Failed again → update retry info
+      webhook.retries += 1;
+
+      // Exponential backoff (2^retries minutes)
+      const delayMinutes = Math.pow(2, webhook.retries);
+      webhook.nextRetryAt = new Date(Date.now() + delayMinutes * 60 * 1000);
+      webhook.error = err.message;
+
+      await webhook.save();
+      console.error(
+        `Webhook ${webhook._id} failed again, retry in ${delayMinutes}m`
+      );
     }
   }
-}
-
-// Reuse your mapping helpers
-function mapRapydEventToType(eventType) {
-  switch (eventType) {
-    case "payment.completed":
-    case "payment.failed":
-      return "deposit";
-    case "transfer.completed":
-    case "transfer.failed":
-      return "transfer";
-    case "wallet.transaction":
-      return "payment";
-    default:
-      return "payment";
-  }
-}
-
-function mapRapydStatus(eventType) {
-  if (eventType.includes("failed")) return "failed";
-  if (eventType.includes("completed")) return "success";
-  return "pending";
 }
 
 module.exports = { processFailedWebhooks };
