@@ -66,6 +66,15 @@ mongoose
   .connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB connected"))
   .catch((err) => console.error(err));
+// server.js (after DB connection)
+const { processFailedWebhooks } = require("./src/services/webhookRetryProcessor");
+
+// Run every 2 minutes
+setInterval(() => {
+  processFailedWebhooks(5).catch(err =>
+    console.error("Retry processor error:", err)
+  );
+}, 2 * 60 * 1000);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
