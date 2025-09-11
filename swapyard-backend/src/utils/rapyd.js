@@ -1,4 +1,4 @@
-// utils/rapyd.js
+// src/utils/rapyd.js
 const crypto = require("crypto");
 const axios = require("axios");
 
@@ -8,8 +8,14 @@ const RAPYD_BASE_URL = "https://sandboxapi.rapyd.net/v1";
 
 function generateSignature(httpMethod, urlPath, salt, timestamp, body) {
   const bodyString = body ? JSON.stringify(body) : "";
-  const toSign = httpMethod + urlPath + salt + timestamp + RAPYD_ACCESS_KEY + RAPYD_SECRET_KEY + bodyString;
-  return crypto.createHmac("sha256", RAPYD_SECRET_KEY).update(toSign).digest("hex");
+  const toSign =
+    httpMethod.toLowerCase() + urlPath + salt + timestamp +
+    RAPYD_ACCESS_KEY + RAPYD_SECRET_KEY + bodyString;
+
+  return crypto
+    .createHmac("sha256", RAPYD_SECRET_KEY)
+    .update(toSign)
+    .digest("hex");
 }
 
 async function rapydRequest(method, path, body = null) {
@@ -22,10 +28,10 @@ async function rapydRequest(method, path, body = null) {
     url: `${RAPYD_BASE_URL}${path}`,
     headers: {
       "Content-Type": "application/json",
-      "access_key": RAPYD_ACCESS_KEY,
-      "salt": salt,
-      "timestamp": timestamp,
-      "signature": signature,
+      access_key: RAPYD_ACCESS_KEY,
+      salt,
+      timestamp,
+      signature,
     },
     data: body,
   });
@@ -34,4 +40,3 @@ async function rapydRequest(method, path, body = null) {
 }
 
 module.exports = { rapydRequest };
-
