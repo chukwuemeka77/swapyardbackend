@@ -1,6 +1,6 @@
 // routes/admin.js
 const express = require("express");
-const { processFailedWebhooks } = require("../services/webhooks/webhookRetryService");
+const { processFailedWebhooks } = require("../services/webhookRetryProcessor");
 const router = express.Router();
 
 router.post("/retry-failed-webhooks", async (req, res) => {

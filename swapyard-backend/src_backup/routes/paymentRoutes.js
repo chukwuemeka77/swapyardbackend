@@ -2,7 +2,7 @@ const router = require('express').Router();
 const auth = require('../middleware/auth');
 const Transaction = require('../models/Transaction');
 const { rapydRequest } = require('../utils/rapyd');
-const { applyHiddenMargin } = require('../services/pricingService');
+const { applyHiddenMargin } = require('../services/pricing');
 
 router.post('/swap/quote', auth, async (req, res) => {
   try {
