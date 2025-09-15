@@ -1,5 +1,5 @@
-// models/Transaction.js
-const mongoose = require("mongoose");
+// src/models/Transaction.js
+import mongoose from "mongoose";
 
 const transactionSchema = new mongoose.Schema(
   {
@@ -8,7 +8,7 @@ const transactionSchema = new mongoose.Schema(
     type: {
       type: String,
       enum: ["deposit", "withdrawal", "transfer", "payment", "fx_exchange"],
-      required: true
+      required: true,
     },
 
     amount: { type: Number, required: true },
@@ -26,7 +26,7 @@ const transactionSchema = new mongoose.Schema(
     status: {
       type: String,
       enum: ["pending", "success", "failed", "reversed"],
-      default: "pending"
+      default: "pending",
     },
 
     description: String,
@@ -35,9 +35,11 @@ const transactionSchema = new mongoose.Schema(
     metadata: { type: mongoose.Schema.Types.Mixed },
 
     // ✅ Store the raw Rapyd webhook event for auditing/debugging
-    rawRapydEvent: { type: mongoose.Schema.Types.Mixed }
+    rawRapydEvent: { type: mongoose.Schema.Types.Mixed },
   },
   { timestamps: true }
 );
 
-module.exports = mongoose.model("Transaction", transactionSchema);
+const Transaction = mongoose.model("Transaction", transactionSchema);
+
+export default Transaction;
