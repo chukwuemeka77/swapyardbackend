@@ -1,0 +1,34 @@
+.
+├── backend-structure.txt
+└── swapyard-backend
+    ├── package-lock.json
+    ├── package.json
+    ├── server.js
+    └── src
+        ├── admin.js
+        ├── config
+        │   └── db.js
+        ├── middleware
+        │   ├── auth.js
+        │   └── authMiddleware.js
+        ├── models
+        │   ├── FailedWebhook.js
+        │   ├── Transaction.js
+        │   ├── User.js
+        │   └── WebhookLog.js
+        ├── routes
+        │   ├── auth.js
+        │   ├── countries.js
+        │   ├── health.js
+        │   ├── notifications.js
+        │   ├── payments.js
+        │   ├── rapydWebhook.js
+        │   └── users.js
+        ├── services
+        │   ├── pricing.js
+        │   └── webhookRetryProcessor.js
+        └── utils
+            ├── rapyd.js
+            └── walletService.js
+
+9 directories, 23 files
