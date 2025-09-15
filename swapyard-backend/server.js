@@ -1,33 +1,58 @@
-import express from "express";
-import cors from "cors";
-import helmet from "helmet";
-import dotenv from "dotenv";
+// server.js
+const express = require("express");
+const cors = require("cors");
+const mongoose = require("mongoose");
+require("dotenv").config();
+const helmet = require("helmet");
 
-import authRoutes from "./routes/authRoutes.js";
-import countryRoutes from "./routes/countryRoutes.js";
+// Import routes
+const authRoutes = require("./src/routes/authRoutes");
+const userRoutes = require("./src/routes/userRoutes");
+const countryRoutes = require("./src/routes/countryRoutes");
+const healthRoutes = require("./src/routes/healthRoutes");
+const notificationRoutes = require("./src/routes/notificationRoutes");
+const paymentRoutes = require("./src/routes/paymentRoutes");
+const rapydWebhookRoutes = require("./src/routes/rapydWebhookRoutes");
 
-dotenv.config();
+// DB config
+const connectDB = require("./src/config/db");
 
+// Initialize app
 const app = express();
+
+// ===== Middleware =====
+app.use(cors());
 app.use(express.json());
 
-// Security middleware
-app.use(cors({ origin: "http://localhost:5500" })); // change if frontend URL differs
+// Helmet security (with basic CSP)
 app.use(
-  helmet.contentSecurityPolicy({
-    useDefaults: true,
-    directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"], // allow Tailwind inline styles
-      imgSrc: ["'self'", "data:"],
+  helmet({
+    contentSecurityPolicy: {
+      useDefaults: true,
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "https:", "'unsafe-inline'"],
+        imgSrc: ["'self'", "data:", "https:"],
+      },
     },
   })
 );
 
-// Routes
-app.use("/auth", authRoutes);
-app.use("/countries", countryRoutes);
+// ===== Routes =====
+app.use("/api/auth", authRoutes);
+app.use("/api/users", userRoutes);
+app.use("/api/countries", countryRoutes);
+app.use("/api/health", healthRoutes);
+app.use("/api/notifications", notificationRoutes);
+app.use("/api/payments", paymentRoutes);
+app.use("/api/webhooks", rapydWebhookRoutes);
 
+// ===== Server & DB =====
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`✅ Backend running on port ${PORT}`));
+
+connectDB().then(() => {
+  app.listen(PORT, () => {
+    console.log(`✅ Server running on http://localhost:${PORT}`);
+  });
+});
