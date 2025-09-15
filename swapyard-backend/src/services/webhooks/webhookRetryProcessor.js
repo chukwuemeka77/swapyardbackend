@@ -1,4 +1,4 @@
-// src/services/webhookRetryProcessor.js
+// src/services/webhooks/webhookRetryProcessor.js
 const FailedWebhook = require("../models/FailedWebhook");
 const axios = require("axios");
 
