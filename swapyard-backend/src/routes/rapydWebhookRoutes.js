@@ -1,4 +1,3 @@
-// src/routes/rapydWebhook.js
 const express = require("express");
 const router = express.Router();
 const FailedWebhook = require("../models/FailedWebhook");
