@@ -1,8 +1,8 @@
-// src/routes/notificationRoutes.js
 const router = require("express").Router();
 const auth = require("../middleware/auth");
-const { addClient, notifyUser, sseClients } = require("../services/sseService");
+const { addClient, notifyUser } = require("../services/sseService");
 
+// SSE stream for real-time notifications
 router.get("/stream", auth, (req, res) => {
   res.set({
     "Content-Type": "text/event-stream",
@@ -10,24 +10,28 @@ router.get("/stream", auth, (req, res) => {
     Connection: "keep-alive",
     "X-Accel-Buffering": "no",
   });
-  res.flushHeaders();
-  res.write("retry: 10000\n\n");
 
+  res.flushHeaders();
+  res.write("retry: 10000\n\n"); // reconnect hint
+
+  // Register this client
   addClient(req.user.id, res);
 
-  // Send initial hello event
-  res.write(
-    `data: ${JSON.stringify({ type: "hello", ts: Date.now() })}\n\n`
-  );
+  // Send initial handshake
+  res.write(`data: ${JSON.stringify({ type: "hello", ts: Date.now() })}\n\n`);
 
+  // Cleanup on disconnect
   req.on("close", () => {
-    if (sseClients[req.user.id]) {
-      sseClients[req.user.id].delete(res);
-      if (sseClients[req.user.id].size === 0) {
-        delete sseClients[req.user.id];
-      }
-    }
+    console.log(`🔌 Client disconnected: ${req.user.id}`);
   });
 });
 
+// Optional: endpoint to trigger test notification
+router.post("/test", auth, (req, res) => {
+  const message = { type: "test", msg: "This is a test notification" };
+  notifyUser(req.user.id, message);
+  res.json({ success: true, message });
+});
+
 module.exports = router;
+
