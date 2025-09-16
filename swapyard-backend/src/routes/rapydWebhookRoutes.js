@@ -1,28 +1,31 @@
-const express = require("express");
-const router = express.Router();
-const FailedWebhook = require("../models/FailedWebhook");
+// src/routes/rapydWebhookRoutes.js
+const router = require("express").Router();
+const { notifyUser } = require("../services/sseService");
 
+// ✅ Rapyd sends POST requests here
 router.post("/", async (req, res) => {
   try {
-    const payload = req.body;
+    const event = req.body;
 
-    // 👉 Your actual Rapyd webhook processing logic goes here
-    // Example: save to DB, update user balances, etc.
-    // For now, assume it succeeds:
-    console.log("Received webhook:", payload);
+    console.log("Received Rapyd webhook:", event.type);
 
-    return res.status(200).send("ok");
+    // Example: extract userId from metadata (depends on how you create payments)
+    const userId = event?.data?.metadata?.userId;
+
+    if (userId) {
+      // Forward the event via SSE to the correct user
+      notifyUser(userId, {
+        type: "rapyd_event",
+        event: event.type,
+        data: event.data,
+      });
+    }
+
+    // Always reply quickly to Rapyd (they expect 200)
+    res.status(200).send("Webhook received");
   } catch (err) {
-    console.error("Webhook processing failed:", err.message);
-
-    // ❌ Save failed webhook for retry later
-    await FailedWebhook.create({
-      payload: req.body,
-      endpoint: "/api/rapyd/webhook",
-      error: err.message
-    });
-
-    return res.status(500).send("failed");
+    console.error("Error handling Rapyd webhook:", err);
+    res.status(500).send("Error");
   }
 });
 
