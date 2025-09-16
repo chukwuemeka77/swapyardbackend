@@ -1,26 +1,32 @@
-const express = require("express");
+// src/routes/notificationRoutes.js
+const router = require("express").Router();
 const auth = require("../middleware/auth");
-const { addClient } = require("../services/sseService");
-
-const router = express.Router();
+const { addClient, notifyUser, sseClients } = require("../services/sseService");
 
 router.get("/stream", auth, (req, res) => {
   res.set({
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
     Connection: "keep-alive",
-    "X-Accel-Buffering": "no"
+    "X-Accel-Buffering": "no",
   });
-
   res.flushHeaders();
   res.write("retry: 10000\n\n");
 
   addClient(req.user.id, res);
 
-  res.write(`data: ${JSON.stringify({ type: "hello", ts: Date.now() })}\n\n`);
+  // Send initial hello event
+  res.write(
+    `data: ${JSON.stringify({ type: "hello", ts: Date.now() })}\n\n`
+  );
 
   req.on("close", () => {
-    // client cleanup handled automatically by garbage collection
+    if (sseClients[req.user.id]) {
+      sseClients[req.user.id].delete(res);
+      if (sseClients[req.user.id].size === 0) {
+        delete sseClients[req.user.id];
+      }
+    }
   });
 });
 
