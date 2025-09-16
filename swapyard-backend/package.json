@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
   
-  "test": "echo \"No tests defined yet\""
+  "test": "echo \"No tests defined yet\"",
 
 
     "start": "node server.js",
