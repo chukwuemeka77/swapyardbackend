@@ -1,35 +1,27 @@
-const router = require('express').Router();
-const auth = require('../middleware/auth');
+const express = require("express");
+const auth = require("../middleware/auth");
+const { addClient } = require("../services/sseService");
 
-module.exports = function makeNotificationsRouter(paymentsRouter) {
-  const sseClients = paymentsRouter.__sseClients;
-  const notifyUser = paymentsRouter.__notifyUser;
+const router = express.Router();
 
-  router.get('/stream', auth, (req, res) => {
-    res.set({
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-      'X-Accel-Buffering': 'no'
-    });
-    res.flushHeaders();
-    res.write('retry: 10000\n\n');
-
-    if (!sseClients[req.user.id]) sseClients[req.user.id] = new Set();
-    sseClients[req.user.id].add(res);
-
-    res.write(`data: ${JSON.stringify({ type: 'hello', ts: Date.now() })}\n\n`);
-
-    req.on('close', () => {
-      sseClients[req.user.id].delete(res);
-      res.end();
-    });
+router.get("/stream", auth, (req, res) => {
+  res.set({
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no"
   });
 
-  router.post('/send', auth, (req, res) => {
-    notifyUser(req.user.id, req.body || { type: 'ping' });
-    res.json({ ok: true });
-  });
+  res.flushHeaders();
+  res.write("retry: 10000\n\n");
 
-  return router;
-};
+  addClient(req.user.id, res);
+
+  res.write(`data: ${JSON.stringify({ type: "hello", ts: Date.now() })}\n\n`);
+
+  req.on("close", () => {
+    // client cleanup handled automatically by garbage collection
+  });
+});
+
+module.exports = router;
