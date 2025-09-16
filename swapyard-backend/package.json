@@ -4,10 +4,6 @@
   "description": "Backend API for Swapyard (authentication, wallet, payments, Rapyd integration)",
   "main": "server.js",
   "scripts": {
-  
-  "test": "echo \"No tests defined yet\"",
-
-
     "start": "node server.js",
     "dev": "nodemon server.js"
   },
