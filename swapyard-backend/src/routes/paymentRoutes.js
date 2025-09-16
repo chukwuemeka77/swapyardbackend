@@ -1,92 +1,60 @@
-const router = require('express').Router();
-const auth = require('../middleware/auth');
-const Transaction = require('../models/Transaction');
-const { rapydRequest } = require('../utils/rapyd');
-const { applyHiddenMargin } = require('../services/pricingService');
+// src/routes/paymentRoutes.js
+const router = require("express").Router();
+const auth = require("../middleware/auth");
+const { notifyUser } = require("../services/sseService");
 
-router.post('/swap/quote', auth, async (req, res) => {
+// Example: handle a payment creation
+router.post("/create", auth, async (req, res) => {
   try {
-    const { sourceCurrency, targetCurrency, sourceAmount } = req.body;
-    if (!sourceCurrency || !targetCurrency || !sourceAmount) {
-      return res.status(400).json({ error: 'Missing fields' });
-    }
+    const { amount, currency } = req.body;
 
-    // Replace with real Rapyd rate call when account access is ready:
-    // const rapydRes = await rapydRequest('GET', `/v1/rates?base_currency=${sourceCurrency}`);
-    // const baseRate = rapydRes.data.rates[targetCurrency];
-    const baseRate = 0.90; // temp placeholder
-
-    const { effectiveRate } = applyHiddenMargin(baseRate, Number(sourceAmount));
-    const targetAmount = Number(sourceAmount) * effectiveRate;
-
-    res.json({
-      sourceCurrency,
-      targetCurrency,
-      sourceAmount: Number(sourceAmount),
-      targetAmount: Number(targetAmount.toFixed(2)),
-      effectiveRate: Number(effectiveRate.toFixed(6))
-    });
-  } catch (e) {
-    console.error('quote error', e?.response?.data || e.message);
-    res.status(500).json({ error: 'Quote failed' });
-  }
-});
-
-router.post('/pay', auth, async (req, res) => {
-  try {
-    const { amount, currency, accountNumber, bankCode, accountName } = req.body;
-    if (!amount || !currency || !accountNumber || !bankCode) {
-      return res.status(400).json({ error: 'Missing fields' });
-    }
-
-    const tx = await Transaction.create({
+    // 💡 Normally you'd save payment details in DB here
+    const payment = {
+      id: Date.now().toString(),
       userId: req.user.id,
-      type: 'payment',
-      status: 'pending',
-      sourceAmount: Number(amount),
-      sourceCurrency: currency,
-      counterpartyName: accountName || '',
-      counterpartyAccount: accountNumber,
-      counterpartyBank: bankCode
-    });
+      amount,
+      currency,
+      status: "pending",
+    };
 
-    // Example Rapyd payout call (to enable later):
-    // const rapydRes = await rapydRequest('POST', '/v1/payouts', { ... });
-
-    const providerRef = `SIM-${tx._id.toString().slice(-6)}`; // TEMP simulate
-    tx.status = 'completed';
-    tx.providerRef = providerRef;
-    await tx.save();
-
+    // Notify the user (frontend listening via /notifications/stream)
     notifyUser(req.user.id, {
-      type: 'payment',
-      title: 'Payment sent',
-      body: `You sent ${amount} ${currency} to ${accountName || accountNumber}`,
-      txId: tx._id
+      type: "payment_created",
+      payment,
     });
 
-    res.json({ success: true, transactionId: tx._id, providerRef });
-  } catch (e) {
-    console.error('pay error', e?.response?.data || e.message);
-    res.status(500).json({ error: 'Payment failed' });
+    res.json({ success: true, payment });
+  } catch (err) {
+    console.error("Payment creation failed:", err);
+    res.status(500).json({ error: "Failed to create payment" });
   }
 });
 
-router.get('/transactions', auth, async (req, res) => {
-  const limit = Math.min(Number(req.query.limit) || 50, 200);
-  const items = await Transaction.find({ userId: req.user.id }).sort({ createdAt: -1 }).limit(limit).lean();
-  res.json({ items });
-});
+// Example: simulate payment success callback
+router.post("/success/:id", auth, async (req, res) => {
+  try {
+    const paymentId = req.params.id;
 
-/* SSE notification plumbing exposed for notifications router */
-let sseClients = {};
-function notifyUser(userId, payload) {
-  const subs = sseClients[userId];
-  if (!subs) return;
-  const message = `data: ${JSON.stringify(payload)}\n\n`;
-  subs.forEach((res) => res.write(message));
-}
-router.__notifyUser = notifyUser;
-router.__sseClients = sseClients;
+    // 💡 Update DB payment status here...
+    const payment = {
+      id: paymentId,
+      userId: req.user.id,
+      status: "success",
+    };
+
+    // Notify user that payment is successful
+    notifyUser(req.user.id, {
+      type: "payment_success",
+      payment,
+    });
+
+    res.json({ success: true, payment });
+  } catch (err) {
+    console.error("Payment success update failed:", err);
+    res.status(500).json({ error: "Failed to update payment" });
+  }
+});
 
 module.exports = router;
+
+   
