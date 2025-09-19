@@ -1,36 +1,20 @@
+// src/routes/countryRoutes.js
 const express = require("express");
+const { rapydRequest } = require("../utils/rapyd");
 const router = express.Router();
 
-// Using Node 18+ fetch (no node-fetch needed)
 router.get("/", async (req, res) => {
   try {
-    const RAPYD_API_KEY = process.env.RAPYD_API_KEY;
-    const RAPYD_API_SECRET = process.env.RAPYD_API_SECRET;
+    const rapydData = await rapydRequest("get", "/data/countries");
 
-    // Call Rapyd API
-    const response = await fetch("https://sandboxapi.rapyd.net/v1/data/countries", {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-        "access_key": RAPYD_API_KEY,
-        "secret_key": RAPYD_API_SECRET
-      }
-    });
-
-    if (!response.ok) {
-      console.error("Rapyd countries fetch failed:", response.status, await response.text());
-      return res.status(500).json({ error: "Failed to fetch countries" });
-    }
-
-    const rapydData = await response.json();
-
-    // Rapyd wraps countries in rapydData.data
+    // Rapyd wraps results in data
     res.json({ countries: rapydData.data || [] });
   } catch (err) {
-    console.error("Error in /countries route:", err);
+    console.error("Error fetching countries:", err.response?.data || err.message);
     res.status(500).json({ error: "Server error fetching countries" });
   }
 });
 
 module.exports = router;
+
 
