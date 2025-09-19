@@ -6,7 +6,7 @@ const { rapydRequest } = require("../utils/rapyd");
 // GET /api/countries
 router.get("/", async (req, res) => {
   try {
-    // Use your signed Rapyd helper
+    // Use the signed Rapyd request helper
     const result = await rapydRequest("GET", "/data/countries");
 
     res.json({ countries: result.data || [] });
@@ -17,4 +17,5 @@ router.get("/", async (req, res) => {
 });
 
 module.exports = router;
+
 
