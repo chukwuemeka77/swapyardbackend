@@ -9,18 +9,23 @@ const RAPYD_BASE_URL = "https://sandboxapi.rapyd.net/v1";
 function generateSignature(httpMethod, urlPath, salt, timestamp, body) {
   const bodyString = body ? JSON.stringify(body) : "";
   const toSign =
-    httpMethod.toLowerCase() + urlPath + salt + timestamp +
-    RAPYD_ACCESS_KEY + RAPYD_SECRET_KEY + bodyString;
+    httpMethod.toLowerCase() +
+    urlPath +
+    salt +
+    timestamp +
+    RAPYD_ACCESS_KEY +
+    RAPYD_SECRET_KEY +
+    bodyString;
 
   return crypto
     .createHmac("sha256", RAPYD_SECRET_KEY)
     .update(toSign)
-    .digest("hex");
+    .digest("base64"); // ✅ Must be base64
 }
 
 async function rapydRequest(method, path, body = null) {
   const salt = crypto.randomBytes(8).toString("hex");
-  const timestamp = (Math.floor(Date.now() / 1000) - 10).toString();
+  const timestamp = (Math.floor(Date.now() / 1000)).toString(); // no -10 needed
   const signature = generateSignature(method, path, salt, timestamp, body);
 
   const res = await axios({
