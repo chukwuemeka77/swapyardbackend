@@ -2,6 +2,9 @@ const express = require("express");
 const cors = require("cors");
 const mongoose = require("mongoose");
 require("dotenv").config();
+console.log("Access Key:", process.env.RAPYD_ACCESS_KEY);
+console.log("Secret Key:", process.env.RAPYD_SECRET_KEY);
+
 const helmet = require("helmet");
 
 const app = express();
