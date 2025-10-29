@@ -1,27 +1,32 @@
-// src/routes/notificationRoutes.js
-import express from "express";
-import auth from "../middleware/auth.js";
-import { addClient, notifyUser } from "../services/sseService.js";
-import { subscriber, publisher } from "../services/redisPubSub.js";
-
+// const express = require("express");
 const router = express.Router();
+const auth = require("../middleware/auth");
+const { addClient, notifyUser, removeClient } = require("../services/sseService");
+const redisClient = require("../services/redisClient");
 
-// ==================== Redis Pub/Sub Setup ====================
-
-// Subscribe to 'notifications' channel for cross-instance updates
+// ✅ Subscribe to Redis channel for cross-instance notifications
 (async () => {
   try {
+    // Duplicate client for subscription (so main client can still publish)
+    const subscriber = redisClient.duplicate ? redisClient.duplicate() : redisClient;
+    if (subscriber.connect) await subscriber.connect();
+
     await subscriber.subscribe("notifications", (message) => {
-      const { userId, data } = JSON.parse(message);
-      notifyUser(userId, data); // forward to local SSE clients
+      try {
+        const { userId, data } = JSON.parse(message);
+        notifyUser(userId, data);
+      } catch (err) {
+        console.error("Redis message parsing error:", err.message || err);
+      }
     });
-    console.log("📡 Redis Pub/Sub: Subscribed to 'notifications'");
+
+    console.log("📡 Redis Pub/Sub: Subscribed to 'notifications' channel");
   } catch (err) {
-    console.error("❌ Redis subscription failed:", err.message);
+    console.error("❌ Redis subscription failed:", err.message || err);
   }
 })();
 
-// ==================== SSE Stream ====================
+// ==================== SSE stream ====================
 router.get("/stream", auth, (req, res) => {
   res.set({
     "Content-Type": "text/event-stream",
@@ -41,25 +46,9 @@ router.get("/stream", auth, (req, res) => {
 
   // Cleanup on disconnect
   req.on("close", () => {
-    console.log(`🔌 SSE client disconnected: ${req.user.id}`);
+    removeClient(req.user.id, res);
+    console.log(`🔌 SSE Client disconnected: ${req.user.id}`);
   });
 });
 
-// ==================== Test Notification ====================
-router.post("/test", auth, async (req, res) => {
-  const message = { type: "test", msg: "This is a test notification" };
-
-  // 1️⃣ Notify local SSE clients
-  notifyUser(req.user.id, message);
-
-  // 2️⃣ Publish to Redis for other instances
-  try {
-    await publisher.publish("notifications", JSON.stringify({ userId: req.user.id, data: message }));
-  } catch (err) {
-    console.error("❌ Redis publish failed:", err.message);
-  }
-
-  res.json({ success: true, message });
-});
-
-export default router;
+// ==================== Test notification endpoint
