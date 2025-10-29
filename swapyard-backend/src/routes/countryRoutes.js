@@ -1,38 +1,35 @@
 // src/routes/countryRoutes.js
 const express = require("express");
 const router = express.Router();
-const { rapydRequest } = require("../utils/rapyd");
-const redisClient = require("../utils/redisClient"); // Import your Redis client
+const axios = require("axios");
+const redisClient = require("../utils/redisClient");
 
+// GET /api/countries
 router.get("/", async (req, res) => {
   try {
-    // 1️⃣ Check Redis cache first
-    const cachedCountries = await redisClient.get("rapyd:countries");
+    const cacheKey = "rapyd_countries";
+    const cached = await redisClient.get(cacheKey);
 
-    if (cachedCountries) {
-      console.log("✅ Serving countries from Redis cache");
-      return res.json({
-        status: "success",
-        source: "cache",
-        data: JSON.parse(cachedCountries),
-      });
+    if (cached) {
+      return res.json({ status: "success", data: JSON.parse(cached) });
     }
 
-    // 2️⃣ If not cached, fetch from Rapyd API
-    const result = await rapydRequest("GET", "/data/countries");
-    const countries = result.data || [];
-
-    // 3️⃣ Store in Redis with TTL (e.g., 24 hours = 86400 seconds)
-    await redisClient.set("rapyd:countries", JSON.stringify(countries), { ex: 86400 });
-
-    console.log("🌍 Fetched and cached countries from Rapyd API");
-    res.json({
-      status: "success",
-      source: "api",
-      data: countries,
+    // Fetch from Rapyd API
+    const response = await axios.get("https://sandboxapi.rapyd.net/v1/data/countries", {
+      headers: {
+        access_key: process.env.RAPYD_API_KEY,
+        secret_key: process.env.RAPYD_SECRET_KEY,
+      },
     });
+
+    const countries = response.data.data;
+
+    // Cache for 24h
+    await redisClient.setEx(cacheKey, 86400, JSON.stringify(countries));
+
+    res.json({ status: "success", data: countries });
   } catch (err) {
-    console.error("❌ Error fetching countries:", {
+    console.error("Error fetching countries:", {
       status: err.response?.status,
       data: err.response?.data,
       message: err.message,
