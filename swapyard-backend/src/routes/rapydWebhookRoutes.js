@@ -1,6 +1,8 @@
 // src/routes/rapydWebhookRoutes.js
-const router = require("express").Router();
-const { notifyUser } = require("../services/sseService");
+const express = require("express");
+const router = express.Router();
+const redisClient = require("../utils/redisClient");
+const { notifyUser } = require("../routes/notificationRoutes");
 
 // ✅ Rapyd sends POST requests here
 router.post("/", async (req, res) => {
@@ -9,19 +11,32 @@ router.post("/", async (req, res) => {
 
     console.log("Received Rapyd webhook:", event.type);
 
-    // Example: extract userId from metadata (depends on how you create payments)
+    // Example: extract userId from metadata (depends on your payment/wallet creation)
     const userId = event?.data?.metadata?.userId;
 
     if (userId) {
-      // Forward the event via SSE to the correct user
+      // 1️⃣ Notify local SSE clients
       notifyUser(userId, {
         type: "rapyd_event",
         event: event.type,
         data: event.data,
       });
+
+      // 2️⃣ Publish to Redis for multi-instance notification
+      await redisClient.publish(
+        "notifications",
+        JSON.stringify({
+          userId,
+          data: {
+            type: "rapyd_event",
+            event: event.type,
+            data: event.data,
+          },
+        })
+      );
     }
 
-    // Always reply quickly to Rapyd (they expect 200)
+    // Always respond 200 to Rapyd quickly
     res.status(200).send("Webhook received");
   } catch (err) {
     console.error("Error handling Rapyd webhook:", err);
