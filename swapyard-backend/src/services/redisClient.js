@@ -1,32 +1,35 @@
 // src/services/redisClient.js
-import { createClient } from "redis";
+import axios from "axios";
 import dotenv from "dotenv";
 
 dotenv.config();
 
-const redisClient = createClient({
-  socket: {
-    host: process.env.REDIS_HOST || "127.0.0.1",
-    port: process.env.REDIS_PORT || 6379,
-  },
-  password: process.env.REDIS_PASSWORD || undefined,
-});
+const REST_URL = process.env.UPSTASH_REDIS_REST_URL;
+const REST_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
+const PREFIX = process.env.REDIS_PREFIX || "swapyard";
 
-redisClient.on("connect", () => {
-  console.log("Redis client connected");
-});
-
-redisClient.on("error", (err) => {
-  console.error("Redis error:", err);
-});
-
-// Connect to Redis immediately
-(async () => {
+async function redisGet(key) {
   try {
-    await redisClient.connect();
+    const response = await axios.get(`${REST_URL}/get/${PREFIX}:${key}`, {
+      headers: { Authorization: `Bearer ${REST_TOKEN}` },
+    });
+    return response.data.result ? JSON.parse(response.data.result) : null;
   } catch (err) {
-    console.error("Redis connection failed:", err);
+    console.error("Redis GET error:", err.message);
+    return null;
   }
-})();
+}
 
-export default redisClient;
+async function redisSet(key, value, ttlSeconds = 86400) {
+  try {
+    await axios.post(
+      `${REST_URL}/set/${PREFIX}:${key}/${encodeURIComponent(JSON.stringify(value))}/${ttlSeconds}`,
+      {},
+      { headers: { Authorization: `Bearer ${REST_TOKEN}` } }
+    );
+  } catch (err) {
+    console.error("Redis SET error:", err.message);
+  }
+}
+
+export default { get: redisGet, set: redisSet };
