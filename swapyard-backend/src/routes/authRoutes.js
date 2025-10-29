@@ -1,19 +1,21 @@
 // src/routes/authRoutes.js
-const express = require("express");
-const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
-const axios = require("axios");
-const User = require("../models/User");
-const redisClient = require("../utils/redisClient");
-require("dotenv").config();
+import express from "express";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+import axios from "axios";
+import dotenv from "dotenv";
+import User from "../models/User.js";
+import redisClient from "../services/redisClient.js";
+
+dotenv.config();
 
 const router = express.Router();
 
-// Helper: fetch Rapyd countries with caching
+// Helper: fetch Rapyd countries (cached)
 async function getRapydCountries() {
   const cacheKey = "rapyd_countries";
   const cached = await redisClient.get(cacheKey);
-  if (cached) return JSON.parse(cached);
+  if (cached) return cached;
 
   const response = await axios.get("https://sandboxapi.rapyd.net/v1/data/countries", {
     headers: {
@@ -23,65 +25,69 @@ async function getRapydCountries() {
   });
 
   const countries = response.data.data;
-  await redisClient.setEx(cacheKey, 86400, JSON.stringify(countries));
+  await redisClient.set(cacheKey, countries, 86400); // cache 24h
   return countries;
 }
 
-// Signup
+// ==================== SIGNUP ====================
 router.post("/signup", async (req, res) => {
   try {
     const { name, identifier, password, country } = req.body;
 
-    if (!identifier) return res.status(400).json({ error: "Email or phone is required" });
+    if (!name || !password || !identifier)
+      return res.status(400).json({ error: "Name, password, and email or phone are required" });
+
+    // Check if user exists
+    const existingUser = await User.findOne({
+      $or: [{ email: identifier.includes("@") ? identifier : null }, { phone: !identifier.includes("@") ? identifier : null }],
+    });
+    if (existingUser) return res.status(400).json({ error: "User already exists" });
+
+    // Hash password
+    const passwordHash = await bcrypt.hash(password, 10);
 
     // Fetch countries
     const countries = await getRapydCountries();
     const selectedCountry = countries.find(c => c.name.toLowerCase() === country.toLowerCase());
     if (!selectedCountry) return res.status(400).json({ error: "Country not supported" });
-    const currency = selectedCountry.currency;
 
-    // Check existing user
-    const existingUser = await User.findOne({ $or: [{ email: identifier }, { phone: identifier }] });
-    if (existingUser) return res.status(400).json({ error: "User already exists" });
-
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const defaultCurrency = selectedCountry.currency;
 
     // Create user
     const user = new User({
       name,
       email: identifier.includes("@") ? identifier : null,
       phone: identifier.includes("@") ? null : identifier,
-      passwordHash: hashedPassword,
-      defaultCurrency: currency,
-      defaultCountry: country,
+      passwordHash,
+      defaultCountry: selectedCountry.name,
+      defaultCurrency,
     });
     await user.save();
 
-    // Create non-KYC Rapyd wallet
+    // Create non-KYC wallet in Rapyd
     const walletResponse = await axios.post(
       "https://sandboxapi.rapyd.net/v1/wallets",
       {
         name,
-        currency,
+        currency: defaultCurrency,
         type: "personal",
         ewallet_reference_id: user._id.toString(),
         metadata: { identifier, country },
       },
-      {
-        headers: {
-          access_key: process.env.RAPYD_API_KEY,
-          secret_key: process.env.RAPYD_SECRET_KEY,
-        },
-      }
+      { headers: { access_key: process.env.RAPYD_API_KEY, secret_key: process.env.RAPYD_SECRET_KEY } }
     );
 
-    user.rapydId = walletResponse.data.data.id;
+    user.walletId = walletResponse.data.data.id;
     await user.save();
 
-    res.json({
+    res.status(201).json({
       message: "Signup successful",
-      user: { id: user._id, identifier, wallet_id: user.rapydId, currency: user.defaultCurrency },
+      user: {
+        id: user._id,
+        identifier,
+        walletId: user.walletId,
+        currency: user.defaultCurrency,
+      },
     });
   } catch (err) {
     console.error(err.response?.data || err);
@@ -89,25 +95,40 @@ router.post("/signup", async (req, res) => {
   }
 });
 
-// Login
+// ==================== LOGIN ====================
 router.post("/login", async (req, res) => {
   try {
     const { identifier, password } = req.body;
-    if (!identifier || !password) return res.status(400).json({ error: "Identifier and password required" });
+    if (!identifier || !password)
+      return res.status(400).json({ error: "Email/phone and password are required" });
 
-    const user = await User.findOne({ $or: [{ email: identifier }, { phone: identifier }] });
+    // Find user
+    const user = await User.findOne({
+      $or: [{ email: identifier.includes("@") ? identifier : null }, { phone: !identifier.includes("@") ? identifier : null }],
+    });
     if (!user) return res.status(400).json({ error: "User not found" });
 
+    // Check password
     const isValid = await bcrypt.compare(password, user.passwordHash);
     if (!isValid) return res.status(400).json({ error: "Invalid credentials" });
 
+    // JWT token
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET || "defaultsecret", { expiresIn: "7d" });
 
-    res.json({ message: "Login successful", token, user: { id: user._id, name: user.name, identifier, currency: user.defaultCurrency } });
+    res.json({
+      message: "Login successful",
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+      },
+    });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Login failed" });
+    console.error("Login error:", err);
+    res.status(500).json({ error: "Server error during login" });
   }
 });
 
-module.exports = router;
+export default router;
