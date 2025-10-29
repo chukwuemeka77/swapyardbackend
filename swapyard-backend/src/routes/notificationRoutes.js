@@ -1,4 +1,4 @@
-// src/routes/notificationRoutes.js
+/// src/routes/notificationRoutes.js
 const router = require("express").Router();
 const auth = require("../middleware/auth");
 const { addClient, notifyUser } = require("../services/sseService");
@@ -38,11 +38,6 @@ router.get("/stream", auth, (req, res) => {
 
   // Send initial handshake
   res.write(`data: ${JSON.stringify({ type: "hello", ts: Date.now() })}\n\n`);
-
-  // Cleanup on disconnect
-  req.on("close", () => {
-    console.log(`🔌 Client disconnected: ${req.user.id}`);
-  });
 });
 
 // Endpoint to trigger test notification
