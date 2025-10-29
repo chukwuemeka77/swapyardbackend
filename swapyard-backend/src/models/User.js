@@ -34,12 +34,13 @@ const userSchema = new mongoose.Schema(
     passwordHash: { type: String, required: true },
 
     // Wallet
-    balances: [walletBalanceSchema], // ✅ multi-currency wallet
-    defaultCurrency: { type: String, default: "USD" },
+    wallet_id: { type: String }, // Rapyd wallet ID ✅
+    balances: [walletBalanceSchema], // multi-currency wallet
+    defaultCurrency: { type: String, default: "USD" }, // auto-set from country
     defaultCountry: { type: String, default: "US" },
 
     // Payment Methods
-    paymentMethods: [paymentMethodSchema], // ✅ saved cards/banks/crypto
+    paymentMethods: [paymentMethodSchema],
 
     // KYC / Compliance
     kycVerified: { type: Boolean, default: false },
