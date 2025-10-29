@@ -1,8 +1,10 @@
-// swapyard-backend/src/services/redisClient.js
-const redis = require("redis");
-require("dotenv").config();
+// src/services/redisClient.js
+import { createClient } from "redis";
+import dotenv from "dotenv";
 
-const redisClient = redis.createClient({
+dotenv.config();
+
+const redisClient = createClient({
   socket: {
     host: process.env.REDIS_HOST || "127.0.0.1",
     port: process.env.REDIS_PORT || 6379,
@@ -10,9 +12,21 @@ const redisClient = redis.createClient({
   password: process.env.REDIS_PASSWORD || undefined,
 });
 
-redisClient
-  .connect()
-  .then(() => console.log("Redis connected successfully"))
-  .catch((err) => console.error("Redis connection error:", err));
+redisClient.on("connect", () => {
+  console.log("Redis client connected");
+});
 
-module.exports = redisClient;
+redisClient.on("error", (err) => {
+  console.error("Redis error:", err);
+});
+
+// Connect to Redis immediately
+(async () => {
+  try {
+    await redisClient.connect();
+  } catch (err) {
+    console.error("Redis connection failed:", err);
+  }
+})();
+
+export default redisClient;
