@@ -1,14 +1,36 @@
+// swapyard-backend/src/routes/authRoutes.js
 const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const axios = require("axios");
 const User = require("../models/User");
+const redisClient = require("../services/redisClient");
+require("dotenv").config();
 
 const router = express.Router();
+
+// ==================== HELPER: FETCH RAPYD COUNTRIES ====================
+async function getRapydCountries() {
+  const cacheKey = "rapyd_countries";
+  const cached = await redisClient.get(cacheKey);
+  if (cached) return JSON.parse(cached);
+
+  const response = await axios.get("https://sandboxapi.rapyd.net/v1/data/countries", {
+    headers: {
+      access_key: process.env.RAPYD_API_KEY,
+      secret_key: process.env.RAPYD_SECRET_KEY,
+    },
+  });
+
+  const countries = response.data.data;
+  await redisClient.setEx(cacheKey, 86400, JSON.stringify(countries)); // cache for 24h
+  return countries;
+}
 
 // ==================== SIGNUP ====================
 router.post("/signup", async (req, res) => {
   try {
-    const { name, email, phone, password } = req.body;
+    const { name, email, phone, password, country } = req.body;
 
     // Validate required fields
     if (!name || !password || (!email && !phone)) {
@@ -26,21 +48,61 @@ router.post("/signup", async (req, res) => {
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Create new user
+    // Fetch countries and determine default currency
+    const countries = await getRapydCountries();
+    const selectedCountry = countries.find(
+      (c) => c.name.toLowerCase() === country.toLowerCase()
+    );
+    if (!selectedCountry) return res.status(400).json({ error: "Country not supported" });
+    const currency = selectedCountry.currency;
+
+    // Create new user in MongoDB
     const newUser = new User({
       name,
-      email,
-      phone,
+      email: email || null,
+      phone: phone || null,
       passwordHash: hashedPassword,
+      country,
+      currency,
     });
 
     await newUser.save();
 
+    // Create non-KYC wallet in Rapyd
+    const walletResponse = await axios.post(
+      "https://sandboxapi.rapyd.net/v1/wallets",
+      {
+        name,
+        currency,
+        type: "personal",
+        ewallet_reference_id: newUser._id.toString(),
+        metadata: { email, phone, country },
+      },
+      {
+        headers: {
+          access_key: process.env.RAPYD_API_KEY,
+          secret_key: process.env.RAPYD_SECRET_KEY,
+        },
+      }
+    );
+
+    // Save wallet ID
+    newUser.wallet_id = walletResponse.data.data.id;
+    await newUser.save();
+
     res.status(201).json({
-      message: "Signup successful! Please login.",
+      message: "Signup successful! Wallet created.",
+      user: {
+        id: newUser._id,
+        name: newUser.name,
+        email: newUser.email,
+        phone: newUser.phone,
+        wallet_id: newUser.wallet_id,
+        currency: newUser.currency,
+      },
     });
   } catch (err) {
-    console.error("Signup error:", err);
+    console.error("Signup error:", err.response?.data || err);
     res.status(500).json({ error: "Server error during signup" });
   }
 });
@@ -84,6 +146,8 @@ router.post("/login", async (req, res) => {
         name: user.name,
         email: user.email,
         phone: user.phone,
+        wallet_id: user.wallet_id,
+        currency: user.currency,
       },
     });
   } catch (err) {
@@ -93,6 +157,3 @@ router.post("/login", async (req, res) => {
 });
 
 module.exports = router;
-
-
-
