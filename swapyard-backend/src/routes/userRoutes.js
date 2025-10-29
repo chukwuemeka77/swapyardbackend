@@ -1,23 +1,38 @@
-// src/routes/userRoute.js
+// src/routes/user.js
 const express = require("express");
 const router = express.Router();
 const auth = require("../middleware/auth");
-const { rapydRequest } = require("../utils/rapyd");
+const axios = require("axios");
 const redisClient = require("../utils/redisClient");
+
+const RAPYD_API_KEY = process.env.RAPYD_API_KEY;
+const RAPYD_SECRET_KEY = process.env.RAPYD_SECRET_KEY;
+
+// Helper to make Rapyd requests
+async function rapydRequest(method, path, data = null) {
+  const url = `https://sandboxapi.rapyd.net/v1${path}`;
+  const options = {
+    method,
+    url,
+    headers: { access_key: RAPYD_API_KEY, secret_key: RAPYD_SECRET_KEY },
+    data,
+  };
+  const response = await axios(options);
+  return response.data;
+}
 
 // GET /api/users/me
 router.get("/me", auth, async (req, res) => {
   try {
-    const user = req.user; // added by auth middleware
-    const cacheKey = `user:${user._id}:dashboard`;
+    const user = req.user; // from auth middleware
+    const cacheKey = `user_wallets:${user._id}`;
+    const cached = await redisClient.get(cacheKey);
 
-    // 1️⃣ Check Redis cache first
-    const cachedData = await redisClient.get(cacheKey);
-    if (cachedData) {
-      return res.json(JSON.parse(cachedData));
+    if (cached) {
+      return res.json(JSON.parse(cached));
     }
 
-    // 2️⃣ Fetch wallets from Rapyd
+    // Fetch wallets from Rapyd
     const walletRes = await rapydRequest("GET", `/user/${user.rapydId}/wallets`);
     const wallets = walletRes.data || [];
 
@@ -27,11 +42,11 @@ router.get("/me", auth, async (req, res) => {
 
     const wallet = wallets[0]; // primary wallet
 
-    // 3️⃣ Fetch transactions
+    // Fetch transactions
     const txRes = await rapydRequest("GET", `/wallets/${wallet.id}/transactions`);
     const transactions = txRes.data || [];
 
-    const dashboardData = {
+    const responseData = {
       name: user.name,
       email: user.email,
       balance: wallet.balance,
@@ -45,10 +60,10 @@ router.get("/me", auth, async (req, res) => {
       })),
     };
 
-    // 4️⃣ Cache dashboard data for 60 seconds
-    await redisClient.setEx(cacheKey, 60, JSON.stringify(dashboardData));
+    // Cache result for 10 minutes
+    await redisClient.setEx(cacheKey, 600, JSON.stringify(responseData));
 
-    res.json(dashboardData);
+    res.json(responseData);
   } catch (err) {
     console.error("Error in /me:", err.response?.data || err.message);
     res.status(500).json({ error: "Failed to load dashboard data" });
