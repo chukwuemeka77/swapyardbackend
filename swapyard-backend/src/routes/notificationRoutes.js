@@ -3,12 +3,16 @@ const express = require("express");
 const router = express.Router();
 const auth = require("../middleware/auth");
 const { addClient, notifyUser } = require("../services/sseService");
+const { createClient } = require("redis");
 const redisClient = require("../utils/redisClient");
 
 // Subscribe to Redis channel for cross-instance notifications
 (async () => {
   try {
-    const subscriber = redisClient.duplicate();
+    const subscriber = createClient({
+      url: process.env.REDIS_URL || "redis://localhost:6379",
+    });
+    subscriber.on("error", (err) => console.error("Redis Subscriber Error:", err));
     await subscriber.connect();
 
     await subscriber.subscribe("notifications", (message) => {
@@ -32,12 +36,9 @@ router.get("/stream", auth, (req, res) => {
   });
 
   res.flushHeaders();
-  res.write("retry: 10000\n\n"); // hint browser to retry on disconnect
+  res.write("retry: 10000\n\n");
 
-  // Register SSE client
   addClient(req.user.id, res);
-
-  // Send handshake message
   res.write(`data: ${JSON.stringify({ type: "hello", ts: Date.now() })}\n\n`);
 
   req.on("close", () => {
@@ -49,10 +50,8 @@ router.get("/stream", auth, (req, res) => {
 router.post("/test", auth, async (req, res) => {
   const message = { type: "test", msg: "This is a test notification" };
 
-  // Notify local instance
   notifyUser(req.user.id, message);
 
-  // Publish to Redis (for other instances)
   try {
     await redisClient.publish(
       "notifications",
