@@ -1,54 +1,45 @@
-// const express = require("express");
+// src/routes/notificationRoutes.js
+const express = require("express");
 const router = express.Router();
-const auth = require("../middleware/auth");
-const { addClient, notifyUser, removeClient } = require("../services/sseService");
-const redisClient = require("../services/redisClient");
 
-// ✅ Subscribe to Redis channel for cross-instance notifications
-(async () => {
-  try {
-    // Duplicate client for subscription (so main client can still publish)
-    const subscriber = redisClient.duplicate ? redisClient.duplicate() : redisClient;
-    if (subscriber.connect) await subscriber.connect();
+const { addClient, notifyUser } = require("../services/sseService");
+const redisClient = require("../utils/redisClient");
 
-    await subscriber.subscribe("notifications", (message) => {
-      try {
-        const { userId, data } = JSON.parse(message);
-        notifyUser(userId, data);
-      } catch (err) {
-        console.error("Redis message parsing error:", err.message || err);
-      }
-    });
+// SSE endpoint: /api/notifications/stream/:userId
+router.get("/stream/:userId", (req, res) => {
+  const { userId } = req.params;
 
-    console.log("📡 Redis Pub/Sub: Subscribed to 'notifications' channel");
-  } catch (err) {
-    console.error("❌ Redis subscription failed:", err.message || err);
-  }
-})();
-
-// ==================== SSE stream ====================
-router.get("/stream", auth, (req, res) => {
-  res.set({
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache",
-    Connection: "keep-alive",
-    "X-Accel-Buffering": "no",
-  });
-
+  // Set headers for SSE
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
   res.flushHeaders();
-  res.write("retry: 10000\n\n"); // reconnect hint
 
-  // Register this client
-  addClient(req.user.id, res);
+  // Register this connection
+  addClient(userId, res);
 
-  // Send initial handshake
-  res.write(`data: ${JSON.stringify({ type: "hello", ts: Date.now() })}\n\n`);
-
-  // Cleanup on disconnect
-  req.on("close", () => {
-    removeClient(req.user.id, res);
-    console.log(`🔌 SSE Client disconnected: ${req.user.id}`);
-  });
+  // Initial welcome message
+  res.write(`data: ${JSON.stringify({ message: "Connected to SSE" })}\n\n`);
 });
 
-// ==================== Test notification endpoint
+// Allow local and Redis-triggered notifications
+router.post("/notify", async (req, res) => {
+  const { userId, data } = req.body;
+
+  if (!userId || !data) {
+    return res.status(400).json({ error: "userId and data required" });
+  }
+
+  // Notify local clients
+  notifyUser(userId, data);
+
+  // Notify via Redis (for other instances)
+  await redisClient.publish(
+    "notifications",
+    JSON.stringify({ userId, data })
+  );
+
+  res.json({ success: true });
+});
+
+module.exports = { router, notifyUser };
