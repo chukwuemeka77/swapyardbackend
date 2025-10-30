@@ -1,17 +1,17 @@
-// notificationRoutes.js
+// src/routes/notificationRoutes.js
 const express = require("express");
 const router = express.Router();
 const auth = require("../middleware/auth");
-const { connectRedis, publishNotification, setNotifyUser } = require("../services/redisPubSub");
+const { connectRedis, publishNotification, setNotifyUser } = require("../services/redisClient");
 const { addClient, notifyUser: notifyLocalUser } = require("../services/sseService");
 
-// Link local SSE notifier to Redis subscriber
+// Link local SSE to Redis notifications
 setNotifyUser(notifyLocalUser);
 
-// Connect Redis when routes are loaded
+// Connect Redis on route load
 connectRedis().catch(err => console.error("❌ Redis subscription failed:", err));
 
-// SSE stream for real-time notifications
+// SSE endpoint
 router.get("/stream", auth, (req, res) => {
   res.set({
     "Content-Type": "text/event-stream",
@@ -21,7 +21,7 @@ router.get("/stream", auth, (req, res) => {
   });
 
   res.flushHeaders();
-  res.write("retry: 10000\n\n"); // reconnect hint
+  res.write("retry: 10000\n\n");
 
   addClient(req.user.id, res);
 
@@ -32,14 +32,12 @@ router.get("/stream", auth, (req, res) => {
   });
 });
 
-// Test notification endpoint
+// Test notification
 router.post("/test", auth, async (req, res) => {
   const message = { type: "test", msg: "This is a test notification" };
 
-  // 1️⃣ Notify local clients
   notifyLocalUser(req.user.id, message);
 
-  // 2️⃣ Publish to Redis for multi-instance
   try {
     await publishNotification(req.user.id, message);
   } catch (err) {
