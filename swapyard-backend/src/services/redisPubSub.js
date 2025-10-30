@@ -1,47 +1,56 @@
-// redisPubSub.js
-// Handles Redis Pub/Sub for multi-instance notifications
-
+// src/services/redisPubSub.js
 const { createClient } = require("redis");
-const redisUrl = process.env.REDIS_URL || process.env.UPSTASH_REDIS_URL;
 
-if (!redisUrl) {
-  throw new Error("Missing REDIS_URL in environment variables");
+let notifyUserCallback = null;
+let subscriber;
+let publisher;
+
+/**
+ * Link local SSE notifier
+ * @param {function} callback - function(userId, data)
+ */
+function setNotifyUser(callback) {
+  notifyUserCallback = callback;
 }
 
-const pubClient = createClient({ url: redisUrl });
-const subClient = createClient({ url: redisUrl });
+/**
+ * Publish a notification to Redis channel
+ * @param {string} userId
+ * @param {object} data
+ */
+async function publishNotification(userId, data) {
+  if (!publisher) throw new Error("Redis publisher not connected");
+  await publisher.publish("notifications", JSON.stringify({ userId, data }));
+}
 
-pubClient.on("error", (err) => console.error("Redis PUB error:", err));
-subClient.on("error", (err) => console.error("Redis SUB error:", err));
-
+/**
+ * Connect to Redis (pub/sub) and subscribe to notifications
+ */
 async function connectRedis() {
-  await pubClient.connect();
-  await subClient.connect();
-  console.log("✅ Redis clients connected");
+  const REDIS_URL = process.env.REDIS_URL || process.env.UPSTASH_REDIS_REST_URL;
 
-  // Example: subscribe to 'notifications' channel
-  await subClient.subscribe("notifications", (message) => {
+  // Publisher
+  publisher = createClient({ url: REDIS_URL });
+  publisher.on("error", (err) => console.error("Redis publisher error:", err));
+  await publisher.connect();
+
+  // Subscriber
+  subscriber = createClient({ url: REDIS_URL });
+  subscriber.on("error", (err) => console.error("Redis subscriber error:", err));
+  await subscriber.connect();
+
+  await subscriber.subscribe("notifications", (message) => {
     try {
       const { userId, data } = JSON.parse(message);
-      // This will call the SSE notifier from notificationRoutes
-      if (notifyUser) notifyUser(userId, data);
+      if (notifyUserCallback && userId && data) {
+        notifyUserCallback(userId, data);
+      }
     } catch (err) {
-      console.error("Error parsing Redis message:", err);
+      console.error("Failed to parse Redis notification:", err);
     }
   });
-}
 
-let notifyUser = null; // will be set from notificationRoutes
-
-function setNotifyUser(fn) {
-  notifyUser = fn;
-}
-
-async function publishNotification(userId, data) {
-  await pubClient.publish(
-    "notifications",
-    JSON.stringify({ userId, data })
-  );
+  console.log("✅ Redis pub/sub connected and listening for notifications");
 }
 
 module.exports = { connectRedis, publishNotification, setNotifyUser };
