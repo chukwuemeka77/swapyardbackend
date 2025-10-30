@@ -1,29 +1,29 @@
 // server.js
-import express from "express";
-import cors from "cors";
-import helmet from "helmet";
-import mongoose from "mongoose";
-import dotenv from "dotenv";
-
-dotenv.config();
+const express = require("express");
+const cors = require("cors");
+const helmet = require("helmet");
+const mongoose = require("mongoose");
+require("dotenv").config();
 
 console.log("Access Key:", process.env.RAPYD_ACCESS_KEY);
 console.log("Secret Key:", process.env.RAPYD_SECRET_KEY);
 
-import userRoutes from "./src/routes/userRoutes.js";
-import paymentRoutes from "./src/routes/paymentRoutes.js";
-import countryRoutes from "./src/routes/countryRoutes.js";
-import healthRoutes from "./src/routes/healthRoutes.js";
-import rapydWebhookRoutes from "./src/routes/rapydWebhookRoutes.js";
-import notificationsRoutes from "./src/routes/notificationRoutes.js";
+// Routes (CommonJS require)
+const userRoutes = require("./src/routes/userRoutes");
+const paymentRoutes = require("./src/routes/paymentRoutes");
+const countryRoutes = require("./src/routes/countryRoutes");
+const healthRoutes = require("./src/routes/healthRoutes");
+const rapydWebhookRoutes = require("./src/routes/rapydWebhookRoutes");
+const notificationsRoutes = require("./src/routes/notificationRoutes");
 
-import { connectRedis } from "./src/services/redisClient.js";
+// Redis connection
+const { connectRedis } = require("./src/services/redisClient");
 
 const app = express();
 
 // ===== Middleware =====
 app.use(cors());
-app.use(express.json());
+app.use(express.json()); // Parse JSON
 app.use(helmet());
 
 // ===== MongoDB Connection =====
