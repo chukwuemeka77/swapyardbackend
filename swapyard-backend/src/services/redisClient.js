@@ -1,35 +1,60 @@
 // src/services/redisClient.js
 const { createClient } = require("redis");
 
-const REDIS_URL = process.env.REDIS_URL || "redis://localhost:6379";
+let redisClient;
+let subscriber;
+let notifyUserCallback = () => {};
 
-const client = createClient({ url: REDIS_URL });
-
-client.on("error", (err) => console.error("❌ Redis Client Error:", err));
+function setNotifyUser(cb) {
+  notifyUserCallback = cb;
+}
 
 async function connectRedis() {
-  if (!client.isOpen) {
-    await client.connect();
-    console.log("✅ Redis client connected");
-  }
+  redisClient = createClient({ url: process.env.REDIS_URL });
+  subscriber = redisClient.duplicate();
+
+  redisClient.on("error", (err) => console.error("❌ Redis Client Error:", err));
+  subscriber.on("error", (err) => console.error("❌ Redis Subscriber Error:", err));
+
+  await redisClient.connect();
+  await subscriber.connect();
+
+  console.log("✅ Redis connected");
+
+  // Subscribe to notifications channel
+  await subscriber.subscribe("notifications", (message) => {
+    try {
+      const { userId, payload } = JSON.parse(message);
+      notifyUserCallback(userId, payload);
+    } catch (err) {
+      console.error("❌ Redis parse error:", err);
+    }
+  });
 }
 
-async function get(key) {
-  try {
-    const value = await client.get(key);
-    return value ? JSON.parse(value) : null;
-  } catch (err) {
-    console.error("Redis GET error:", err);
-    return null;
-  }
+async function publishNotification(userId, payload) {
+  if (!redisClient) throw new Error("Redis not connected");
+  await redisClient.publish(
+    "notifications",
+    JSON.stringify({ userId, payload })
+  );
 }
 
-async function set(key, value, ttlSeconds = 86400) {
-  try {
-    await client.set(key, JSON.stringify(value), { EX: ttlSeconds });
-  } catch (err) {
-    console.error("Redis SET error:", err);
-  }
+async function setCache(key, value, ttl = 3600) {
+  if (!redisClient) throw new Error("Redis not connected");
+  await redisClient.set(key, JSON.stringify(value), { EX: ttl });
 }
 
-module.exports = { client, connectRedis, get, set };
+async function getCache(key) {
+  if (!redisClient) throw new Error("Redis not connected");
+  const val = await redisClient.get(key);
+  return val ? JSON.parse(val) : null;
+}
+
+module.exports = {
+  connectRedis,
+  publishNotification,
+  setNotifyUser,
+  setCache,
+  getCache,
+};
