@@ -1,47 +1,54 @@
-const express = require("express");
-const cors = require("cors");
-const mongoose = require("mongoose");
-require("dotenv").config();
+// server.js
+import express from "express";
+import cors from "cors";
+import helmet from "helmet";
+import mongoose from "mongoose";
+import dotenv from "dotenv";
+
+dotenv.config();
+
 console.log("Access Key:", process.env.RAPYD_ACCESS_KEY);
 console.log("Secret Key:", process.env.RAPYD_SECRET_KEY);
 
-const helmet = require("helmet");
+import userRoutes from "./src/routes/userRoutes.js";
+import paymentRoutes from "./src/routes/paymentRoutes.js";
+import countryRoutes from "./src/routes/countryRoutes.js";
+import healthRoutes from "./src/routes/healthRoutes.js";
+import rapydWebhookRoutes from "./src/routes/rapydWebhookRoutes.js";
+import notificationsRoutes from "./src/routes/notificationRoutes.js";
+
+import { connectRedis } from "./src/services/redisClient.js";
 
 const app = express();
 
 // ===== Middleware =====
 app.use(cors());
-app.use(express.json()); // Parse JSON
+app.use(express.json());
 app.use(helmet());
 
 // ===== MongoDB Connection =====
 mongoose
-  .connect(process.env.MONGO_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  })
+  .connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
   .then(() => console.log("✅ MongoDB connected"))
   .catch((err) => console.error("❌ MongoDB connection error:", err));
 
-// ===== Routes =====
-const userRoutes = require("./src/routes/userRoutes");
-const paymentRoutes = require("./src/routes/paymentRoutes");
-const countryRoutes = require("./src/routes/countryRoutes");
-const healthRoutes = require("./src/routes/healthRoutes");
-const rapydWebhookRoutes = require("./src/routes/rapydWebhookRoutes");
-const notificationsRoutes = require("./src/routes/notificationRoutes");
+// ===== Redis Connection =====
+connectRedis().catch(err => console.error("❌ Redis connection failed:", err));
 
-// Regular routes
+// ===== Routes =====
 app.use("/api/users", userRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/countries", countryRoutes);
 app.use("/api/health", healthRoutes);
 
-// Webhooks (Rapyd calls this directly)
+// Webhooks
 app.use("/api/webhook/rapyd", rapydWebhookRoutes);
 
-// SSE notifications stream
+// SSE / Notifications
 app.use("/api/notifications", notificationsRoutes);
+
+// ===== Health check route =====
+app.get("/health", (req, res) => res.json({ status: "ok", ts: Date.now() }));
 
 // ===== Start Server =====
 const PORT = process.env.PORT || 5000;
