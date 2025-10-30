@@ -1,30 +1,15 @@
-// src/routes/notificationRoutes.js
+// notificationRoutes.js
 const express = require("express");
 const router = express.Router();
 const auth = require("../middleware/auth");
-const { addClient, notifyUser } = require("../services/sseService");
-const { createClient } = require("redis");
-const redisClient = require("../utils/redisClient");
+const { connectRedis, publishNotification, setNotifyUser } = require("../services/redisPubSub");
+const { addClient, notifyUser: notifyLocalUser } = require("../services/sseService");
 
-// Subscribe to Redis channel for cross-instance notifications
-(async () => {
-  try {
-    const subscriber = createClient({
-      url: process.env.REDIS_URL || "redis://localhost:6379",
-    });
-    subscriber.on("error", (err) => console.error("Redis Subscriber Error:", err));
-    await subscriber.connect();
+// Link local SSE notifier to Redis subscriber
+setNotifyUser(notifyLocalUser);
 
-    await subscriber.subscribe("notifications", (message) => {
-      const { userId, data } = JSON.parse(message);
-      notifyUser(userId, data);
-    });
-
-    console.log("📡 Redis Pub/Sub: Subscribed to 'notifications' channel");
-  } catch (err) {
-    console.error("❌ Redis subscription failed:", err.message);
-  }
-})();
+// Connect Redis when routes are loaded
+connectRedis().catch(err => console.error("❌ Redis subscription failed:", err));
 
 // SSE stream for real-time notifications
 router.get("/stream", auth, (req, res) => {
@@ -36,9 +21,10 @@ router.get("/stream", auth, (req, res) => {
   });
 
   res.flushHeaders();
-  res.write("retry: 10000\n\n");
+  res.write("retry: 10000\n\n"); // reconnect hint
 
   addClient(req.user.id, res);
+
   res.write(`data: ${JSON.stringify({ type: "hello", ts: Date.now() })}\n\n`);
 
   req.on("close", () => {
@@ -46,19 +32,18 @@ router.get("/stream", auth, (req, res) => {
   });
 });
 
-// Endpoint to send a test notification manually
+// Test notification endpoint
 router.post("/test", auth, async (req, res) => {
   const message = { type: "test", msg: "This is a test notification" };
 
-  notifyUser(req.user.id, message);
+  // 1️⃣ Notify local clients
+  notifyLocalUser(req.user.id, message);
 
+  // 2️⃣ Publish to Redis for multi-instance
   try {
-    await redisClient.publish(
-      "notifications",
-      JSON.stringify({ userId: req.user.id, data: message })
-    );
+    await publishNotification(req.user.id, message);
   } catch (err) {
-    console.error("❌ Redis publish failed:", err.message);
+    console.error("❌ Redis publish failed:", err);
   }
 
   res.json({ success: true, message });
