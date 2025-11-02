@@ -1,29 +1,60 @@
+// src/workers/withdrawalWorker.js
 const { consumeQueue } = require("../services/rabbitmqService");
 const { notifyUser } = require("../services/sseService");
 const redisClient = require("../services/redisClient");
 const MarkupSetting = require("../models/markupSettings");
-const Transaction = require("../models/Transaction"); // track withdrawals
+const Transaction = require("../models/Transaction");
+const Wallet = require("../models/Wallet");
+const { set, get } = require("../utils/cache");
+const mongoose = require("mongoose");
 
 (async () => {
-  await consumeQueue("withdrawQueue", async (job) => {
-    const { userId, amount, currency, bankAccountId, transactionId } = job;
+  await consumeQueue("withdrawalQueue", async (job) => {
+    const { userId, amount, currency, transactionId, bankAccountId } = job;
     console.log("🏦 Processing withdrawal:", transactionId);
 
-    const markup = await MarkupSetting.findOne({ type: "withdraw" });
-    const markupPercent = markup ? markup.percentage : 0;
-    const finalAmount = amount * (1 - markupPercent / 100); // deduct markup
+    try {
+      let markupPercent = get("withdrawalMarkup");
+      if (markupPercent === null) {
+        const markup = await MarkupSetting.findOne({ type: "withdrawal" });
+        markupPercent = markup ? markup.percentage : 0;
+        set("withdrawalMarkup", markupPercent, 300);
+      }
+      const finalAmount = amount * (1 - markupPercent / 100); // user gets less
 
-    // Simulate bank payout
-    await new Promise((r) => setTimeout(r, 3000));
+      const session = await mongoose.startSession();
+      session.startTransaction();
+      try {
+        await Wallet.findByIdAndUpdate(
+          job.walletId,
+          { $inc: { balance: -amount } },
+          { session }
+        );
+        await Transaction.findByIdAndUpdate(
+          transactionId,
+          { status: "completed", amount: finalAmount },
+          { session }
+        );
+        await session.commitTransaction();
+        session.endSession();
+      } catch (err) {
+        await session.abortTransaction();
+        session.endSession();
+        throw err;
+      }
 
-    await Transaction.findByIdAndUpdate(transactionId, { status: "completed", amount: finalAmount });
+      // TODO: Integrate bank payout API here using bankAccountId
 
-    notifyUser(userId, { type: "withdraw_complete", data: { amount: finalAmount, currency, bankAccountId } });
-    await redisClient.publish(
-      "notifications",
-      JSON.stringify({ userId, data: { type: "withdraw_complete", amount: finalAmount, currency, bankAccountId } })
-    );
+      notifyUser(userId, { type: "withdrawal_complete", data: { amount: finalAmount, currency } });
+      await redisClient.publish(
+        "notifications",
+        JSON.stringify({ userId, data: { type: "withdrawal_complete", amount: finalAmount, currency } })
+      );
 
-    console.log(`✅ Withdrawal completed for ${userId} (final: ${finalAmount})`);
+      console.log(`✅ Withdrawal completed for ${userId} (final: ${finalAmount})`);
+    } catch (err) {
+      console.error("❌ Withdrawal failed:", err.message);
+      throw err;
+    }
   });
 })();
