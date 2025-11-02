@@ -6,11 +6,7 @@ const markupSettingSchema = new mongoose.Schema({
     enum: ["deposit", "exchange", "payment"],
     required: true,
   },
-  percentage: {
-    type: Number,
-    required: true,
-    min: 0,
-  },
+  percentage: { type: Number, required: true, min: 0 },
 });
 
 module.exports = mongoose.model("MarkupSetting", markupSettingSchema);
