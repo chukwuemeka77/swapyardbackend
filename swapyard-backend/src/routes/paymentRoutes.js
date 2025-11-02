@@ -2,82 +2,56 @@ const router = require("express").Router();
 const auth = require("../middleware/auth");
 const { notifyUser } = require("../services/sseService");
 const redisClient = require("../services/redisClient");
-const { publishToQueue } = require("../services/rabbitmqService");
+const { sendToQueue } = require("../services/rabbitmqService");
 
-// ==================== Create Payment ====================
+// ==================== Create payment ====================
 router.post("/create", auth, async (req, res) => {
   try {
-    const { amount, currency } = req.body;
+    const { amount, currency, walletId } = req.body;
 
-    // 💡 Normally, you would save this in MongoDB (Transaction model)
-    const payment = {
-      id: Date.now().toString(),
-      userId: req.user.id,
-      amount,
-      currency,
-      status: "pending",
-    };
+    const transactionId = Date.now().toString(); // simple unique ID
 
-    // 1️⃣ Queue the payment for background processing (RabbitMQ)
-    await publishToQueue("paymentQueue", {
-      paymentId: payment.id,
-      userId: payment.userId,
-      amount: payment.amount,
-      currency: payment.currency,
-    });
+    // enqueue job for background worker
+    await sendToQueue("paymentQueue", { userId: req.user.id, walletId, amount, currency, transactionId });
 
-    // 2️⃣ Notify local SSE clients
+    // immediate notification (optional)
     notifyUser(req.user.id, {
       type: "payment_created",
-      payment,
+      data: { amount, currency, transactionId },
     });
 
-    // 3️⃣ Publish to Redis for other instances
+    // cross-instance notification
     await redisClient.publish(
       "notifications",
-      JSON.stringify({
-        userId: req.user.id,
-        data: { type: "payment_created", payment },
-      })
+      JSON.stringify({ userId: req.user.id, data: { type: "payment_created", amount, currency, transactionId } })
     );
 
-    res.json({ success: true, message: "Payment queued for processing", payment });
+    res.json({ success: true, message: "Payment queued", transactionId });
   } catch (err) {
-    console.error("❌ Payment creation failed:", err);
-    res.status(500).json({ error: "Failed to create payment" });
+    console.error("Payment creation failed:", err);
+    res.status(500).json({ error: "Failed to queue payment" });
   }
 });
 
-// ==================== Payment Success Callback ====================
+// ==================== Simulate payment success callback ====================
 router.post("/success/:id", auth, async (req, res) => {
   try {
-    const paymentId = req.params.id;
+    const transactionId = req.params.id;
 
-    // 💡 Normally, update payment status in MongoDB
-    const payment = {
-      id: paymentId,
-      userId: req.user.id,
-      status: "success",
-    };
-
-    // 1️⃣ Notify local SSE clients
+    // For now, just notify front-end (worker already charged wallet)
     notifyUser(req.user.id, {
       type: "payment_success",
-      payment,
+      data: { transactionId },
     });
 
-    // 2️⃣ Publish to Redis for other instances
     await redisClient.publish(
       "notifications",
-      JSON.stringify({
-        userId: req.user.id,
-        data: { type: "payment_success", payment },
-      })
+      JSON.stringify({ userId: req.user.id, data: { type: "payment_success", transactionId } })
     );
 
-    res.json({ success: true, message: "Payment marked as successful", payment });
+    res.json({ success: true, transactionId });
   } catch (err) {
-    console.error("❌ Payment success update failed:", err);
+    console.error("Payment success update failed:", err);
     res.status(500).json({ error: "Failed to update payment" });
   }
 });
