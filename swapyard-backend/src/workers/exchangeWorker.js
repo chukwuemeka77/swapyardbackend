@@ -1,103 +1,58 @@
-// src/workers/exchangeWorker.js
-const { consumeQueue } = require("../services/rabbitmqService"); // adapt if your service exposes a different name
+const { consumeQueue } = require("../services/rabbitmqService");
 const { notifyUser } = require("../services/sseService");
 const redisClient = require("../services/redisClient");
-const { getRateAndMarkup, applyMarkup } = require("../utils/markupCalculator");
+const MarkupSetting = require("../models/markupSetting");
 const ExchangeProfit = require("../models/ExchangeProfit");
-const Wallet = require("../models/Wallet"); // ensure Wallet model exists
-const Transaction = require("../models/Transaction"); // optional, if you create transactions
+const Wallet = require("../models/Wallet");
 
 (async () => {
   await consumeQueue("exchangeQueue", async (job) => {
-    const { userId, fromCurrency, toCurrency, amount, transactionId } = job;
-    const pair = `${fromCurrency}_${toCurrency}`;
+    const { userId, pair, amount, baseRate } = job;
+    console.log("🔄 Processing FX exchange:", job);
 
-    console.log("💱 Processing exchange job:", { pair, amount, userId, transactionId });
+    // ✅ Fetch exchange markup
+    const markup = await MarkupSetting.findOne({ type: "exchange" });
+    const markupPercent = markup ? markup.percentage : 0;
 
-    try {
-      // 1) get base rate & markup
-      const { baseRate, markupPercent, source } = await getRateAndMarkup(pair);
+    const effectiveRate = baseRate * (1 - markupPercent / 100);
+    const convertedAmount = amount * effectiveRate;
+    const profitEarned = amount * (baseRate - effectiveRate);
 
-      if (!baseRate) {
-        // If no baseRate in DB, either fetch from external API or fail.
-        // Here we fail fast - you may replace with an API call to fetch live rates.
-        throw new Error(`No base rate available for pair ${pair}`);
-      }
+    // 💾 Update user wallet
+    await Wallet.findOneAndUpdate(
+      { userId, currency: pair.split("/")[1] },
+      { $inc: { balance: convertedAmount } },
+      { upsert: true }
+    );
 
-      // 2) apply markup
-      const { effectiveRate, profitPerUnit } = applyMarkup(baseRate, markupPercent);
-      const convertedAmount = amount * effectiveRate;
-      const profitEarned = profitPerUnit * amount;
+    // 💾 Log exchange profit
+    await ExchangeProfit.create({
+      userId,
+      pair,
+      amount,
+      convertedAmount,
+      baseRate,
+      effectiveRate,
+      markupPercent,
+      profitEarned,
+      transactionId: job.transactionId,
+    });
 
-      // 3) Update wallets atomically if you want (simple example)
-      // Debit from source wallet (if present) and credit to destination wallet.
-      // Implement based on your Wallet schema. Example:
-      if (Wallet) {
-        // debit fromCurrency wallet
-        await Wallet.findOneAndUpdate(
-          { userId, currency: fromCurrency },
-          { $inc: { balance: -amount } },
-          { upsert: false }
-        );
+    // Notify user
+    notifyUser(userId, {
+      type: "exchange_complete",
+      data: { pair, convertedAmount, profitEarned, markupPercent },
+    });
 
-        // credit toCurrency wallet
-        await Wallet.findOneAndUpdate(
-          { userId, currency: toCurrency },
-          { $inc: { balance: convertedAmount } },
-          { upsert: true }
-        );
-      }
-
-      // 4) record profit
-      await ExchangeProfit.create({
+    // Redis Pub/Sub
+    await redisClient.publish(
+      "notifications",
+      JSON.stringify({
         userId,
-        pair,
-        amount,
-        convertedAmount,
-        baseRate,
-        effectiveRate,
-        markupPercent,
-        profitEarned,
-        transactionId: transactionId || null,
-      });
+        data: { type: "exchange_complete", pair, convertedAmount, profitEarned, markupPercent },
+      })
+    );
 
-      // 5) optionally update transaction record
-      if (Transaction && transactionId) {
-        await Transaction.findByIdAndUpdate(transactionId, {
-          status: "completed",
-          metadata: {
-            baseRate,
-            effectiveRate,
-            markupPercent,
-            convertedAmount,
-            profitEarned,
-          },
-        });
-      }
-
-      // 6) notify user via SSE
-      const payload = {
-        type: "exchange_complete",
-        data: {
-          fromCurrency,
-          toCurrency,
-          amount,
-          convertedAmount,
-          baseRate,
-          effectiveRate,
-          markupPercent,
-          profitEarned,
-        },
-      };
-      notifyUser(userId, payload);
-
-      // 7) publish via Redis for other instances
-      await redisClient.publish("notifications", JSON.stringify({ userId, data: payload }));
-
-      console.log("✅ Exchange completed:", { pair, amount, convertedAmount, profitEarned });
-    } catch (err) {
-      console.error("❌ Exchange worker error:", err.message || err);
-      throw err; // let RabbitMQ requeue/nack handling manage retries if configured
-    }
+    console.log(`✅ FX completed for ${userId} | Profit: ${profitEarned}`);
   });
 })();
