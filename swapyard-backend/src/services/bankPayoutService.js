@@ -1,37 +1,46 @@
 const axios = require("axios");
+const dotenv = require("dotenv");
+dotenv.config();
 
-async function sendPayout(bankAccount, amount, currency) {
-  switch (bankAccount.provider) {
-    case "rapyd":
-      return await rapydPayout(bankAccount, amount, currency);
-    case "paystack":
-      return await paystackPayout(bankAccount, amount, currency);
-    case "stripe":
-      return await stripePayout(bankAccount, amount, currency);
-    default:
-      throw new Error("Unsupported bank provider");
+const RAPYD_BASE_URL = process.env.RAPYD_BASE_URL;
+const RAPYD_SECRET_KEY = process.env.RAPYD_SECRET_KEY;
+const RAPYD_ACCESS_KEY = process.env.RAPYD_ACCESS_KEY;
+
+// ✅ Send payout via Rapyd
+async function sendRapydPayout(bankAccount, amount, currency, referenceId) {
+  try {
+    const body = {
+      beneficiary: {
+        name: bankAccount.accountHolder,
+        account_number: bankAccount.accountNumber,
+        country: bankAccount.country,
+        currency: currency,
+      },
+      amount: amount,
+      currency: currency,
+      reference_id: referenceId,
+      metadata: {
+        userId: bankAccount.userId.toString(),
+      },
+    };
+
+    const response = await axios.post(
+      `${RAPYD_BASE_URL}/v1/payouts`,
+      body,
+      {
+        headers: {
+          "access_key": RAPYD_ACCESS_KEY,
+          "secret_key": RAPYD_SECRET_KEY,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    return response.data;
+  } catch (err) {
+    console.error("❌ Rapyd payout failed:", err.response?.data || err.message);
+    throw err;
   }
 }
 
-// Example: Rapyd payout
-async function rapydPayout(bankAccount, amount, currency) {
-  // dynamically use bankAccount.accountNumber, bankAccount.bankName, etc.
-  const response = await axios.post(
-    `${process.env.RAPYD_BASE_URL}/payouts`,
-    {
-      amount,
-      currency,
-      beneficiary: {
-        type: "bank_account",
-        account_number: bankAccount.accountNumber,
-        name: bankAccount.accountHolder,
-        bank_name: bankAccount.bankName,
-        country: bankAccount.country,
-      },
-    },
-    { headers: { Authorization: `Bearer ${process.env.RAPYD_SECRET_KEY}` } }
-  );
-  return response.data;
-}
-
-module.exports = { sendPayout };
+module.exports = { sendRapydPayout };
