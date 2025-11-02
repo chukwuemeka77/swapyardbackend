@@ -1,52 +1,52 @@
+// src/workers/withdrawalWorker.js
 const { consumeQueue } = require("../services/rabbitmqService");
 const { notifyUser } = require("../services/sseService");
 const redisClient = require("../services/redisClient");
-const Withdrawal = require("../models/Withdrawal");
-const MarkupSetting = require("../models/markupSettings");
-const { rapydRequest } = require("../services/rapydService");
+const Wallet = require("../models/Wallet"); // your wallet model
+const Transaction = require("../models/Transaction"); // optional transaction model
 
 (async () => {
   await consumeQueue("withdrawalQueue", async (job) => {
-    const { userId, withdrawalId } = job;
-    const withdrawal = await Withdrawal.findById(withdrawalId);
-    if (!withdrawal) return;
+    const { userId, bankAccount, amount, effectiveAmount, markupPercent } = job;
+    console.log("💸 Processing withdrawal:", job);
 
     try {
-      withdrawal.status = "processing";
-      await withdrawal.save();
+      // simulate API call to Rapyd or bank payout
+      await new Promise((r) => setTimeout(r, 2000));
 
-      // apply markup
-      const markup = await MarkupSetting.findOne({ type: "withdrawal" });
-      const markupAmount = markup ? (withdrawal.amount * markup.percentage) / 100 : 0;
-      const finalAmount = withdrawal.amount - markupAmount;
+      // optionally reduce wallet balance
+      await Wallet.findOneAndUpdate({ userId }, { $inc: { balance: -amount } });
 
-      withdrawal.markupPercent = markup ? markup.percentage : 0;
-      withdrawal.finalAmount = finalAmount;
-      await withdrawal.save();
-
-      // Rapyd payout
-      const response = await rapydRequest("POST", "/v1/payouts", {
-        amount: finalAmount,
-        currency: withdrawal.currency,
-        bank_account_id: withdrawal.bankAccountId,
-        metadata: { userId },
+      // save transaction in DB
+      await Transaction.create({
+        userId,
+        type: "withdrawal",
+        amount,
+        effectiveAmount,
+        currency: bankAccount.currency,
+        status: "completed",
+        metadata: { bankAccount, markupPercent },
       });
 
-      withdrawal.status = "completed";
-      withdrawal.transactionId = response.data.id;
-      await withdrawal.save();
+      // Notify via SSE
+      notifyUser(userId, {
+        type: "withdrawal_complete",
+        data: { amount, effectiveAmount, bankAccount, markupPercent },
+      });
 
-      notifyUser(userId, { type: "withdrawal_complete", data: withdrawal });
+      // Publish to Redis for other instances
       await redisClient.publish(
         "notifications",
-        JSON.stringify({ userId, data: { type: "withdrawal_complete", withdrawal } })
+        JSON.stringify({
+          userId,
+          data: { type: "withdrawal_complete", amount, effectiveAmount, bankAccount, markupPercent },
+        })
       );
 
-      console.log(`✅ Withdrawal completed: ${withdrawalId}`);
+      console.log(`✅ Withdrawal completed for ${userId}`);
     } catch (err) {
-      withdrawal.status = "failed";
-      await withdrawal.save();
-      console.error("❌ Withdrawal failed:", err.message);
+      console.error("❌ Withdrawal failed:", err.message || err);
+      // optionally handle retries or push to failed queue
     }
   });
 })();
