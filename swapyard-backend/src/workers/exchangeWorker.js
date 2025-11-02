@@ -1,73 +1,55 @@
-// src/workers/exchangeWorker.js
 const { consumeQueue } = require("../services/rabbitmqService");
 const { notifyUser } = require("../services/sseService");
 const redisClient = require("../services/redisClient");
 const MarkupSetting = require("../models/markupSettings");
 const ExchangeProfit = require("../models/ExchangeProfit");
-const Wallet = require("../models/Wallet");
-const { set, get } = require("../utils/cache");
+const { rapydRequest } = require("../services/rapydService");
 const mongoose = require("mongoose");
 
 (async () => {
   await consumeQueue("exchangeQueue", async (job) => {
-    const { userId, fromCurrency, toCurrency, amount, walletId } = job;
-    console.log("💱 Processing exchange for user:", userId);
+    const { userId, pair, fromAmount, baseRate, walletId, transactionId } = job;
+    console.log("💱 Processing exchange:", transactionId);
 
-    try {
-      // --- Get markup ---
-      let markupPercent = get("exchangeMarkup");
-      if (markupPercent === null) {
-        const markup = await MarkupSetting.findOne({ type: "exchange" });
-        markupPercent = markup ? markup.percentage : 0;
-        set("exchangeMarkup", markupPercent, 300);
-      }
+    // 1️⃣ Get markup
+    const markup = await MarkupSetting.findOne({ type: "exchange" });
+    const markupPercent = markup ? markup.percentage : 0;
 
-      // --- Calculate conversion ---
-      const baseRate = await getBaseRate(fromCurrency, toCurrency); // implement FX API call
-      const effectiveRate = baseRate * (1 - markupPercent / 100);
-      const convertedAmount = amount * effectiveRate;
-      const profit = amount * (baseRate - effectiveRate);
+    const effectiveRate = baseRate * (1 - markupPercent / 100);
+    const convertedAmount = fromAmount * effectiveRate;
+    const profitEarned = fromAmount * (baseRate - effectiveRate);
 
-      const session = await mongoose.startSession();
-      session.startTransaction();
-      try {
-        await Wallet.findByIdAndUpdate(walletId, { $inc: { balance: convertedAmount } }, { session });
-        const exchangeDoc = new ExchangeProfit({
-          userId,
-          pair: `${fromCurrency}_${toCurrency}`,
-          amount,
-          convertedAmount,
-          baseRate,
-          effectiveRate,
-          markupPercent,
-          profitEarned: profit,
-        });
-        await exchangeDoc.save({ session });
-        await session.commitTransaction();
-        session.endSession();
-      } catch (err) {
-        await session.abortTransaction();
-        session.endSession();
-        throw err;
-      }
+    // 2️⃣ Save exchange profit
+    await ExchangeProfit.create({
+      userId,
+      pair,
+      amount: fromAmount,
+      convertedAmount,
+      baseRate,
+      effectiveRate,
+      markupPercent,
+      profitEarned,
+      transactionId,
+    });
 
-      // --- Notify SSE & Redis ---
-      notifyUser(userId, { type: "exchange_complete", data: { fromCurrency, toCurrency, amount, convertedAmount } });
-      await redisClient.publish(
-        "notifications",
-        JSON.stringify({ userId, data: { type: "exchange_complete", fromCurrency, toCurrency, amount, convertedAmount } })
-      );
+    // 3️⃣ Notify user
+    notifyUser(userId, { type: "exchange_complete", data: { pair, convertedAmount, profitEarned } });
+    await redisClient.publish(
+      "notifications",
+      JSON.stringify({ userId, data: { type: "exchange_complete", pair, convertedAmount, profitEarned } })
+    );
 
-      console.log(`✅ Exchange completed for user ${userId}`);
-    } catch (err) {
-      console.error("❌ Exchange failed:", err.message);
-      throw err;
+    // 4️⃣ Move profit to Swapyard wallet
+    if (profitEarned > 0) {
+      await rapydRequest("post", `/v1/account/transfer`, {
+        source_ewallet: walletId,
+        destination_ewallet: process.env.SWAPYARD_WALLET_ID,
+        amount: profitEarned.toFixed(2),
+        currency: pair.split("/")[1],
+        metadata: { transactionId, type: "markup_fee", userId },
+      });
     }
+
+    console.log(`✅ Exchange completed for ${userId} (profit: ${profitEarned})`);
   });
 })();
-
-// Placeholder FX API function
-async function getBaseRate(from, to) {
-  // TODO: Replace with real FX API
-  return 1; // 1:1 dummy rate
-    }
