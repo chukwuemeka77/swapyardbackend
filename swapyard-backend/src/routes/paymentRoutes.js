@@ -2,7 +2,7 @@ const router = require("express").Router();
 const auth = require("../middleware/auth");
 const { notifyUser } = require("../services/sseService");
 const redisClient = require("../services/redisClient");
-const { rapydRequest } = require("../services/rapydService");
+const { publishToQueue } = require("../services/rabbitmqService");
 const MarkupSetting = require("../models/markupSettings");
 
 // ==================== Create payment ====================
@@ -10,37 +10,33 @@ router.post("/create", auth, async (req, res) => {
   try {
     const { amount, currency } = req.body;
 
-    // ✅ Fetch markup
-    const markup = await MarkupSetting.findOne({ type: "payment" });
-    const markupAmount = markup ? (amount * markup.percentage) / 100 : 0;
-    const finalAmount = amount + markupAmount;
-
-    // 💡 Create payment on Rapyd
-    const paymentData = {
-      amount: finalAmount,
-      currency,
-      metadata: { userId: req.user.id },
-    };
-
-    const rapydResponse = await rapydRequest("POST", "/v1/payments", paymentData);
-
+    // 💡 Normally, save payment in DB
     const payment = {
-      id: rapydResponse.data.id,
+      id: Date.now().toString(),
       userId: req.user.id,
-      amount: finalAmount,
-      originalAmount: amount,
+      amount,
       currency,
       status: "pending",
     };
 
-    // ✅ Notify local SSE
+    // apply markup if configured
+    const markup = await MarkupSetting.findOne({ type: "payment" });
+    const markupAmount = markup ? (amount * markup.percentage) / 100 : 0;
+    const finalAmount = amount - markupAmount;
+    payment.finalAmount = finalAmount;
+    payment.markupPercent = markup ? markup.percentage : 0;
+
+    // 1️⃣ Notify local SSE clients
     notifyUser(req.user.id, { type: "payment_created", payment });
 
-    // ✅ Publish to Redis for multi-instance
+    // 2️⃣ Redis Pub/Sub cross-instance
     await redisClient.publish(
       "notifications",
       JSON.stringify({ userId: req.user.id, data: { type: "payment_created", payment } })
     );
+
+    // 3️⃣ Optional: enqueue RabbitMQ worker if needed
+    await publishToQueue("paymentQueue", { userId: req.user.id, payment });
 
     res.json({ success: true, payment });
   } catch (err) {
@@ -49,24 +45,21 @@ router.post("/create", auth, async (req, res) => {
   }
 });
 
-// ==================== Simulate payment success callback ====================
+// ==================== Payment success ====================
 router.post("/success/:id", auth, async (req, res) => {
   try {
     const paymentId = req.params.id;
 
-    // ✅ Optionally call Rapyd to verify payment status
-    const rapydStatus = await rapydRequest("GET", `/v1/payments/${paymentId}`);
-
     const payment = {
       id: paymentId,
       userId: req.user.id,
-      status: rapydStatus.data.status || "success",
+      status: "success",
     };
 
-    // ✅ Notify SSE
+    // SSE
     notifyUser(req.user.id, { type: "payment_success", payment });
 
-    // ✅ Redis Pub/Sub
+    // Redis Pub/Sub
     await redisClient.publish(
       "notifications",
       JSON.stringify({ userId: req.user.id, data: { type: "payment_success", payment } })
