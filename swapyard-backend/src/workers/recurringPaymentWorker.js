@@ -1,3 +1,4 @@
+// src/workers/recurringPaymentWorker.js
 const { consumeQueue } = require("../services/rabbitmqService");
 const { notifyUser } = require("../services/sseService");
 const redisClient = require("../services/redisClient");
@@ -21,7 +22,11 @@ const mongoose = require("mongoose");
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
-      await Transaction.findByIdAndUpdate(transactionId, { status: "completed", amount: finalAmount }, { session });
+      await Transaction.findByIdAndUpdate(
+        transactionId,
+        { status: "completed", amount: finalAmount },
+        { session }
+      );
       await session.commitTransaction();
       session.endSession();
     } catch (err) {
@@ -30,4 +35,28 @@ const mongoose = require("mongoose");
       throw err;
     }
 
-    // 3️⃣ Move markup to Swapyard wallet
+    // 3️⃣ Move markup to Swapyard wallet via Rapyd
+    try {
+      await rapydRequest("post", "/v1/payouts", {
+        beneficiary: process.env.SWAPYARD_RAPYD_WALLET_ID,
+        amount: markupAmount,
+        currency,
+        description: `Recurring payment markup from user ${userId}`,
+      });
+      console.log(`💰 Markup of ${markupAmount} ${currency} moved to Swapyard wallet`);
+    } catch (err) {
+      console.error("❌ Failed to move markup:", err.message || err);
+    }
+
+    // 4️⃣ Notify user via SSE
+    notifyUser(userId, { type: "recurring_payment_complete", data: { amount: finalAmount, currency } });
+
+    // 5️⃣ Publish to Redis Pub/Sub for multi-instance updates
+    await redisClient.publish(
+      "notifications",
+      JSON.stringify({ userId, data: { type: "recurring_payment_complete", amount: finalAmount, currency } })
+    );
+
+    console.log(`✅ Recurring payment completed for user ${userId}`);
+  });
+})();
