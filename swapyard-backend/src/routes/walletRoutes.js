@@ -3,7 +3,7 @@ const auth = require("../middleware/auth");
 const Withdrawal = require("../models/Withdrawal");
 const { publishToQueue } = require("../services/rabbitmqService");
 
-// withdraw endpoint
+// Withdraw to bank account
 router.post("/withdraw", auth, async (req, res) => {
   const { amount, currency, bankAccountId } = req.body;
 
@@ -12,7 +12,7 @@ router.post("/withdraw", auth, async (req, res) => {
     amount,
     currency,
     bankAccountId,
-    finalAmount: amount, // worker will update after markup
+    finalAmount: amount, // worker will adjust markup
   });
 
   // enqueue job
