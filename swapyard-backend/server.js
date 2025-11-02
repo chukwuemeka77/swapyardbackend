@@ -3,48 +3,35 @@ const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const mongoose = require("mongoose");
-require("dotenv").config();
+const dotenv = require("dotenv");
+const { connectRabbitMQ } = require("./src/services/rabbitmqService");
 
-console.log("Access Key:", process.env.RAPYD_ACCESS_KEY);
-console.log("Secret Key:", process.env.RAPYD_SECRET_KEY);
+dotenv.config();
 
-// ===== Routes =====
-const userRoutes = require("./src/routes/userRoutes");
-const paymentRoutes = require("./src/routes/paymentRoutes");
-const countryRoutes = require("./src/routes/countryRoutes");
-const healthRoutes = require("./src/routes/healthRoutes");
-const rapydWebhookRoutes = require("./src/routes/rapydWebhookRoutes");
-const notificationsRoutes = require("./src/routes/notificationRoutes");
-
-// ===== Redis =====
-const { connectRedis } = require("./src/services/redisClient");
-
-// ===== App setup =====
 const app = express();
-app.use(cors());
 app.use(express.json());
+app.use(cors());
 app.use(helmet());
 
-// ===== MongoDB =====
+// 🔹 MongoDB connection
 mongoose
-  .connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
+  .connect(process.env.MONGO_URI)
   .then(() => console.log("✅ MongoDB connected"))
-  .catch((err) => console.error("❌ MongoDB connection error:", err));
+  .catch((err) => console.error("❌ MongoDB error:", err.message));
 
-// ===== Redis =====
-connectRedis().catch(err => console.error("❌ Redis connection failed:", err));
+// 🔹 RabbitMQ connection
+connectRabbitMQ();
 
-// ===== Routes =====
+// 🔹 Routes
+const userRoutes = require("./src/routes/userRoutes");
+const walletRoutes = require("./src/routes/walletRoutes");
+const rapydWebhookRoutes = require("./src/routes/rapydWebhookRoutes");
+const notificationRoutes = require("./src/routes/notificationRoutes");
+
 app.use("/api/users", userRoutes);
-app.use("/api/payments", paymentRoutes);
-app.use("/api/countries", countryRoutes);
-app.use("/api/health", healthRoutes);
-app.use("/api/webhook/rapyd", rapydWebhookRoutes);
-app.use("/api/notifications", notificationsRoutes);
+app.use("/api/wallets", walletRoutes);
+app.use("/api/webhook", rapydWebhookRoutes);
+app.use("/api/notifications", notificationRoutes);
 
-// Health check
-app.get("/health", (req, res) => res.json({ status: "ok", ts: Date.now() }));
-
-// Start server
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
