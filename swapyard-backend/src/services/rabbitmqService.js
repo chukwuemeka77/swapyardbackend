@@ -1,28 +1,36 @@
 // src/services/rabbitmqService.js
-import amqp from "amqplib";
+const amqp = require("amqplib");
 
 let channel;
 
 /**
  * Connect to RabbitMQ and create a channel.
  */
-export async function connectRabbitMQ() {
+async function connectRabbitMQ() {
   try {
     const connection = await amqp.connect(process.env.RABBITMQ_URL);
     channel = await connection.createChannel();
     console.log("✅ RabbitMQ connected");
+
+    connection.on("error", (err) => {
+      console.error("❌ RabbitMQ connection error:", err);
+    });
+
+    connection.on("close", () => {
+      console.warn("⚠️ RabbitMQ connection closed. Attempting reconnect...");
+      setTimeout(connectRabbitMQ, 5000);
+    });
   } catch (err) {
-    console.error("❌ RabbitMQ connection error:", err);
+    console.error("❌ Failed to connect RabbitMQ:", err);
+    setTimeout(connectRabbitMQ, 5000);
   }
 }
 
 /**
- * Send a message to a queue (producer).
- * @param {string} queue - Queue name
- * @param {object} message - Object to send
+ * Publish a job to a queue.
  */
-export async function sendToQueue(queue, message) {
-  if (!channel) throw new Error("RabbitMQ not initialized");
+async function sendToQueue(queue, message) {
+  if (!channel) throw new Error("RabbitMQ not connected");
   await channel.assertQueue(queue, { durable: true });
   channel.sendToQueue(queue, Buffer.from(JSON.stringify(message)), {
     persistent: true,
@@ -31,22 +39,25 @@ export async function sendToQueue(queue, message) {
 }
 
 /**
- * Consume messages from a queue (worker).
- * @param {string} queue - Queue name
- * @param {function} handler - Async function to handle messages
+ * Consume jobs from a queue.
  */
-export async function consumeQueue(queue, handler) {
-  if (!channel) throw new Error("RabbitMQ not initialized");
+async function consumeQueue(queue, handler) {
+  if (!channel) throw new Error("RabbitMQ not connected");
   await channel.assertQueue(queue, { durable: true });
+
   channel.consume(queue, async (msg) => {
-    if (msg !== null) {
+    if (msg) {
       try {
         const data = JSON.parse(msg.content.toString());
         await handler(data);
         channel.ack(msg);
       } catch (err) {
-        console.error(`❌ Error processing ${queue}:`, err);
+        console.error(`❌ Error processing job in ${queue}:`, err);
       }
     }
   });
+
+  console.log(`📥 Listening on queue "${queue}"`);
 }
+
+module.exports = { connectRabbitMQ, sendToQueue, consumeQueue };
