@@ -1,35 +1,33 @@
-// src/routes/walletRoutes.js
-const express = require("express");
+const router = require("express").Router();
 const auth = require("../middleware/auth");
+const { notifyUser } = require("../services/sseService");
+const redisClient = require("../services/redisClient");
 const { sendToQueue } = require("../services/rabbitmqService");
 
-const router = express.Router();
-const DEPOSIT_QUEUE = "depositQueue";
-const WITHDRAW_QUEUE = "withdrawQueue";
-
+// ==================== Create deposit ====================
 router.post("/deposit", auth, async (req, res) => {
   try {
-    const { amount, currency } = req.body;
-    const userId = req.user.id;
+    const { amount, currency, walletId } = req.body;
+    const transactionId = Date.now().toString();
 
-    await sendToQueue(DEPOSIT_QUEUE, { userId, amount, currency });
-    res.status(202).json({ message: "Deposit request queued successfully" });
+    // enqueue deposit job
+    await sendToQueue("depositQueue", { userId: req.user.id, walletId, amount, currency, transactionId });
+
+    // notify front-end immediately
+    notifyUser(req.user.id, {
+      type: "deposit_created",
+      data: { amount, currency, transactionId },
+    });
+
+    await redisClient.publish(
+      "notifications",
+      JSON.stringify({ userId: req.user.id, data: { type: "deposit_created", amount, currency, transactionId } })
+    );
+
+    res.json({ success: true, transactionId, message: "Deposit queued" });
   } catch (err) {
-    console.error("Deposit route error:", err);
+    console.error("Deposit creation failed:", err);
     res.status(500).json({ error: "Failed to queue deposit" });
-  }
-});
-
-router.post("/withdraw", auth, async (req, res) => {
-  try {
-    const { amount, currency } = req.body;
-    const userId = req.user.id;
-
-    await sendToQueue(WITHDRAW_QUEUE, { userId, amount, currency });
-    res.status(202).json({ message: "Withdrawal request queued successfully" });
-  } catch (err) {
-    console.error("Withdraw route error:", err);
-    res.status(500).json({ error: "Failed to queue withdrawal" });
   }
 });
 
