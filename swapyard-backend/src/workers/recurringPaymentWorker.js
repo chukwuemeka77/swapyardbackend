@@ -4,15 +4,16 @@ const { notifyUser } = require("../services/sseService");
 const redisClient = require("../services/redisClient");
 const MarkupSetting = require("../models/markupSettings");
 const Transaction = require("../models/Transaction");
+const Wallet = require("../models/Wallet");
 const { rapydRequest } = require("../services/rapydService");
 const mongoose = require("mongoose");
 
 (async () => {
   await consumeQueue("recurringPaymentQueue", async (job) => {
-    const { userId, amount, currency, walletId, transactionId, scheduleId } = job;
+    const { userId, amount, currency, walletId, transactionId } = job;
     console.log("💳 Processing recurring payment:", transactionId);
 
-    // 1️⃣ Get markup for recurring payments
+    // 1️⃣ Get markup
     const markup = await MarkupSetting.findOne({ type: "recurring" });
     const markupPercent = markup ? markup.percentage : 0;
     const markupAmount = amount * (markupPercent / 100);
@@ -35,36 +36,26 @@ const mongoose = require("mongoose");
       throw err;
     }
 
-    // 3️⃣ Transfer markup to Swapyard wallet via Rapyd
+    // 3️⃣ Execute payment via Rapyd
     try {
-      await rapydRequest("POST", "/v1/wallets/transfer", {
-        source_wallet: walletId, // User's wallet
-        destination_wallet: process.env.SWAPYARD_WALLET_ID, // Swapyard's wallet
-        amount: markupAmount,
+      await rapydRequest("POST", "/v1/payments", {
+        amount: finalAmount,
         currency,
-        metadata: { transactionId, scheduleId }
+        customer: userId,
+        wallet: walletId,
       });
-      console.log(`💰 Markup of ${markupAmount} ${currency} moved to Swapyard wallet`);
     } catch (err) {
-      console.error("❌ Failed to move markup to Swapyard wallet:", err.message || err);
-      // Optionally, log for retry or alert admin
+      console.error("❌ Rapyd recurring payment failed:", err.message);
+      return;
     }
 
-    // 4️⃣ Notify user via SSE
-    notifyUser(userId, {
-      type: "recurring_payment_complete",
-      data: { amount: finalAmount, currency, markup: markupAmount }
-    });
-
-    // 5️⃣ Publish to Redis Pub/Sub for cross-instance notification
+    // 4️⃣ Notify user via SSE + Redis
+    notifyUser(userId, { type: "recurring_payment_complete", data: { amount: finalAmount, currency } });
     await redisClient.publish(
       "notifications",
-      JSON.stringify({
-        userId,
-        data: { type: "recurring_payment_complete", amount: finalAmount, currency, markup: markupAmount }
-      })
+      JSON.stringify({ userId, data: { type: "recurring_payment_complete", amount: finalAmount, currency } })
     );
 
-    console.log(`✅ Recurring payment completed for user ${userId} (total charged: ${finalAmount} ${currency})`);
+    console.log(`✅ Recurring payment completed for ${userId} (final: ${finalAmount})`);
   });
 })();
