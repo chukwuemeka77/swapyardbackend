@@ -1,46 +1,42 @@
 // src/routes/rapydWebhookRoutes.js
 const express = require("express");
-const redisClient = require("../utils/redisClient");
-const { notifyUser } = require("../routes/notificationRoutes");
-const { sendToQueue } = require("../services/rabbitmqService");
-
 const router = express.Router();
+const redisClient = require("../utils/redisClient");
+const { notifyUser } = require("../services/sseService");
+const { publishToQueue } = require("../services/rabbitmqService");
 
 router.post("/", async (req, res) => {
   try {
     const event = req.body;
-    console.log("Received Rapyd webhook:", event.type);
+    console.log("📩 Rapyd webhook received:", event.type);
 
-    const userId = event?.data?.metadata?.userId;
+    const userId = event?.data?.metadata?.userId || null;
 
+    // 1️⃣ Always queue the event for background processing
+    await publishToQueue("rapydWebhookQueue", event);
+
+    // 2️⃣ Optionally broadcast instantly (for live frontend updates)
     if (userId) {
-      // 1️⃣ Notify user instantly
-      notifyUser(userId, {
-        type: "rapyd_event",
+      const message = {
+        type: "rapyd_event_received",
         event: event.type,
         data: event.data,
-      });
+      };
 
-      // 2️⃣ Redis broadcast for multi-instance
+      // Local instance via SSE
+      notifyUser(userId, message);
+
+      // Cross-instance via Redis
       await redisClient.publish(
         "notifications",
-        JSON.stringify({
-          userId,
-          data: {
-            type: "rapyd_event",
-            event: event.type,
-            data: event.data,
-          },
-        })
+        JSON.stringify({ userId, data: message })
       );
-
-      // 3️⃣ Push to RabbitMQ for background handling
-      await sendToQueue("rapydWebhookQueue", event);
     }
 
-    res.status(200).send("Webhook received");
+    // Rapyd expects a fast response
+    res.status(200).send("Webhook received ✅");
   } catch (err) {
-    console.error("Error handling Rapyd webhook:", err);
+    console.error("❌ Error handling Rapyd webhook:", err);
     res.status(500).send("Error");
   }
 });
