@@ -1,60 +1,43 @@
-// src/services/redisClient.js
-const { createClient } = require("redis");
+const axios = require("axios");
+const dotenv = require("dotenv");
+dotenv.config();
 
-let redisClient;
-let subscriber;
-let notifyUserCallback = () => {};
+const REST_URL = process.env.UPSTASH_REDIS_REST_URL;
+const REST_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
+const PREFIX = process.env.REDIS_PREFIX || "swapyard";
 
-function setNotifyUser(cb) {
-  notifyUserCallback = cb;
+async function redisGet(key) {
+  try {
+    const response = await axios.get(`${REST_URL}/get/${PREFIX}:${key}`, {
+      headers: { Authorization: `Bearer ${REST_TOKEN}` },
+    });
+    return response.data.result ? JSON.parse(response.data.result) : null;
+  } catch (err) {
+    console.error("Redis GET error:", err.message);
+    return null;
+  }
 }
 
-async function connectRedis() {
-  redisClient = createClient({ url: process.env.REDIS_URL });
-  subscriber = redisClient.duplicate();
-
-  redisClient.on("error", (err) => console.error("❌ Redis Client Error:", err));
-  subscriber.on("error", (err) => console.error("❌ Redis Subscriber Error:", err));
-
-  await redisClient.connect();
-  await subscriber.connect();
-
-  console.log("✅ Redis connected");
-
-  // Subscribe to notifications channel
-  await subscriber.subscribe("notifications", (message) => {
-    try {
-      const { userId, payload } = JSON.parse(message);
-      notifyUserCallback(userId, payload);
-    } catch (err) {
-      console.error("❌ Redis parse error:", err);
-    }
-  });
+async function redisSet(key, value, ttlSeconds = 86400) {
+  try {
+    await axios.post(
+      `${REST_URL}/set/${PREFIX}:${key}/${encodeURIComponent(JSON.stringify(value))}/${ttlSeconds}`,
+      {},
+      { headers: { Authorization: `Bearer ${REST_TOKEN}` } }
+    );
+  } catch (err) {
+    console.error("Redis SET error:", err.message);
+  }
 }
 
-async function publishNotification(userId, payload) {
-  if (!redisClient) throw new Error("Redis not connected");
-  await redisClient.publish(
-    "notifications",
-    JSON.stringify({ userId, payload })
-  );
+async function publish(channel, message) {
+  try {
+    await axios.post(`${REST_URL}/publish/${channel}/${encodeURIComponent(message)}`, {}, {
+      headers: { Authorization: `Bearer ${REST_TOKEN}` },
+    });
+  } catch (err) {
+    console.error("Redis publish error:", err.message);
+  }
 }
 
-async function setCache(key, value, ttl = 3600) {
-  if (!redisClient) throw new Error("Redis not connected");
-  await redisClient.set(key, JSON.stringify(value), { EX: ttl });
-}
-
-async function getCache(key) {
-  if (!redisClient) throw new Error("Redis not connected");
-  const val = await redisClient.get(key);
-  return val ? JSON.parse(val) : null;
-}
-
-module.exports = {
-  connectRedis,
-  publishNotification,
-  setNotifyUser,
-  setCache,
-  getCache,
-};
+module.exports = { get: redisGet, set: redisSet, publish };
