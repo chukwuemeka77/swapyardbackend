@@ -4,43 +4,47 @@ const { notifyUser } = require("../services/sseService");
 const redisClient = require("../services/redisClient");
 const MarkupSetting = require("../models/markupSettings");
 const Transaction = require("../models/Transaction");
-const Wallet = require("../models/Wallet");
-const { set, get } = require("../utils/cache");
+const { fetchDepositFromBank } = require("../services/bankPayoutService");
 
+// Start consuming the deposit queue
 (async () => {
   await consumeQueue("depositQueue", async (job) => {
-    const { userId, amount, currency, transactionId, bankAccount, walletId } = job;
+    const { userId, amount, currency, transactionId, bankAccountId } = job;
     console.log("💰 Processing deposit:", transactionId);
 
-    // Determine domestic vs international
-    const wallet = await Wallet.findById(walletId);
-    const markupType =
-      bankAccount.country === wallet.country ? "deposit" : "deposit_international";
+    try {
+      // ✅ Fetch markup for deposit
+      const markup = await MarkupSetting.findOne({ type: "deposit" });
+      const markupPercent = markup ? markup.percentage : 0;
+      const finalAmount = amount * (1 + markupPercent / 100);
 
-    let markupPercent = get(markupType);
-    if (markupPercent === null) {
-      const markup = await MarkupSetting.findOne({ type: markupType });
-      markupPercent = markup ? markup.percentage : 0;
-      set(markupType, markupPercent, 300); // cache 5 minutes
+      // ✅ If bankAccountId exists, fetch deposit from bank
+      let rapydResponse = null;
+      if (bankAccountId) {
+        rapydResponse = await fetchDepositFromBank(bankAccountId, finalAmount, currency);
+        console.log("💳 Rapyd deposit response:", rapydResponse);
+      }
+
+      // ✅ Update Transaction
+      await Transaction.findByIdAndUpdate(transactionId, {
+        status: "completed",
+        amount: finalAmount,
+      });
+
+      // ✅ Notify user via SSE
+      notifyUser(userId, { type: "deposit_complete", data: { amount: finalAmount, currency } });
+
+      // ✅ Publish to Redis Pub/Sub for cross-instance updates
+      await redisClient.publish(
+        "notifications",
+        JSON.stringify({ userId, data: { type: "deposit_complete", amount: finalAmount, currency } })
+      );
+
+      console.log(`✅ Deposit completed for ${userId} (final amount: ${finalAmount})`);
+    } catch (err) {
+      console.error("❌ Deposit failed:", err.message);
+      // Optionally: requeue the job or mark failed
+      throw err;
     }
-
-    const finalAmount = amount * (1 + markupPercent / 100);
-
-    // Update Transaction
-    await Transaction.findByIdAndUpdate(transactionId, {
-      status: "completed",
-      amount: finalAmount,
-    });
-
-    // Notify user via SSE
-    notifyUser(userId, { type: "deposit_complete", data: { amount: finalAmount, currency } });
-
-    // Publish to Redis for cross-instance
-    await redisClient.publish(
-      "notifications",
-      JSON.stringify({ userId, data: { type: "deposit_complete", amount: finalAmount, currency } })
-    );
-
-    console.log(`✅ Deposit completed for ${userId} (final amount: ${finalAmount})`);
   });
 })();
