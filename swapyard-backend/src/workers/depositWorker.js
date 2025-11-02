@@ -1,43 +1,37 @@
 const { consumeQueue } = require("../services/rabbitmqService");
 const { notifyUser } = require("../services/sseService");
 const redisClient = require("../services/redisClient");
-const MarkupSetting = require("../models/markupSetting");
-const Wallet = require("../models/Wallet");
+const MarkupSetting = require("../models/markupSettings");
 
 (async () => {
   await consumeQueue("depositQueue", async (job) => {
     const { userId, amount, currency } = job;
+
     console.log("💰 Processing deposit:", job);
 
-    // ✅ Fetch deposit markup
+    // apply markup if configured
     const markup = await MarkupSetting.findOne({ type: "deposit" });
-    const markupPercent = markup ? markup.percentage : 0;
+    const markupAmount = markup ? (amount * markup.percentage) / 100 : 0;
+    const finalAmount = amount - markupAmount;
 
-    const finalAmount = amount * (1 - markupPercent / 100); // user gets this
-    const profitEarned = amount - finalAmount;
+    // simulate deposit processing
+    await new Promise((r) => setTimeout(r, 2000));
 
-    // 💾 Update wallet
-    await Wallet.findOneAndUpdate(
-      { userId, currency },
-      { $inc: { balance: finalAmount } },
-      { upsert: true }
-    );
-
-    // Notify user via SSE
+    // notify frontend via SSE
     notifyUser(userId, {
       type: "deposit_complete",
-      data: { amount: finalAmount, currency, profitEarned, markupPercent },
+      data: { amount, finalAmount, currency, markupPercent: markup ? markup.percentage : 0 },
     });
 
-    // Publish to Redis Pub/Sub for cross-instance
+    // Redis Pub/Sub cross-instance
     await redisClient.publish(
       "notifications",
       JSON.stringify({
         userId,
-        data: { type: "deposit_complete", amount: finalAmount, currency, profitEarned, markupPercent },
+        data: { type: "deposit_complete", amount, finalAmount, currency, markupPercent: markup ? markup.percentage : 0 },
       })
     );
 
-    console.log(`✅ Deposit completed for ${userId} | Profit: ${profitEarned}`);
+    console.log(`✅ Deposit completed for ${userId}`);
   });
 })();
