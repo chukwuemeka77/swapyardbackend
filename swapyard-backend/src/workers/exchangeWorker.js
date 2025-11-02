@@ -1,58 +1,41 @@
 const { consumeQueue } = require("../services/rabbitmqService");
 const { notifyUser } = require("../services/sseService");
 const redisClient = require("../services/redisClient");
-const MarkupSetting = require("../models/markupSetting");
+const MarkupSetting = require("../models/markupSettings");
 const ExchangeProfit = require("../models/ExchangeProfit");
-const Wallet = require("../models/Wallet");
 
 (async () => {
   await consumeQueue("exchangeQueue", async (job) => {
     const { userId, pair, amount, baseRate } = job;
-    console.log("🔄 Processing FX exchange:", job);
 
-    // ✅ Fetch exchange markup
+    // apply markup
     const markup = await MarkupSetting.findOne({ type: "exchange" });
-    const markupPercent = markup ? markup.percentage : 0;
-
-    const effectiveRate = baseRate * (1 - markupPercent / 100);
+    const effectiveRate = markup ? baseRate * (1 - markup.percentage / 100) : baseRate;
     const convertedAmount = amount * effectiveRate;
-    const profitEarned = amount * (baseRate - effectiveRate);
+    const profitEarned = convertedAmount - amount * baseRate;
 
-    // 💾 Update user wallet
-    await Wallet.findOneAndUpdate(
-      { userId, currency: pair.split("/")[1] },
-      { $inc: { balance: convertedAmount } },
-      { upsert: true }
-    );
-
-    // 💾 Log exchange profit
-    await ExchangeProfit.create({
+    // save record
+    const profitRecord = await ExchangeProfit.create({
       userId,
       pair,
       amount,
       convertedAmount,
       baseRate,
       effectiveRate,
-      markupPercent,
+      markupPercent: markup ? markup.percentage : 0,
       profitEarned,
-      transactionId: job.transactionId,
+      transactionId: job.transactionId || null,
     });
 
-    // Notify user
-    notifyUser(userId, {
-      type: "exchange_complete",
-      data: { pair, convertedAmount, profitEarned, markupPercent },
-    });
+    // notify frontend via SSE
+    notifyUser(userId, { type: "exchange_complete", data: profitRecord });
 
-    // Redis Pub/Sub
+    // Redis Pub/Sub cross-instance
     await redisClient.publish(
       "notifications",
-      JSON.stringify({
-        userId,
-        data: { type: "exchange_complete", pair, convertedAmount, profitEarned, markupPercent },
-      })
+      JSON.stringify({ userId, data: { type: "exchange_complete", profitRecord } })
     );
 
-    console.log(`✅ FX completed for ${userId} | Profit: ${profitEarned}`);
+    console.log(`✅ Exchange completed for ${userId} (${pair})`);
   });
 })();
