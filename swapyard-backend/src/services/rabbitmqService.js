@@ -1,42 +1,29 @@
+// src/services/rabbitmqService.js
 const amqp = require("amqplib");
 let channel;
 
 async function connectRabbitMQ() {
-  try {
-    const connection = await amqp.connect(process.env.RABBITMQ_URL);
-    channel = await connection.createChannel();
-    console.log("✅ RabbitMQ connected");
-  } catch (err) {
-    console.error("❌ RabbitMQ connection error:", err.message);
-  }
+  const connection = await amqp.connect(process.env.CLOUDAMQP_URL);
+  channel = await connection.createChannel();
+  await channel.assertQueue("withdrawalQueue", { durable: true });
+  console.log("✅ RabbitMQ connected and withdrawalQueue asserted");
 }
 
-async function assertQueue(queue) {
-  if (!channel) throw new Error("RabbitMQ not connected");
-  await channel.assertQueue(queue, { durable: true });
+async function sendToWithdrawalQueue(data) {
+  if (!channel) throw new Error("RabbitMQ channel not initialized");
+  channel.sendToQueue("withdrawalQueue", Buffer.from(JSON.stringify(data)), { persistent: true });
 }
 
-async function sendToQueue(queue, msg) {
-  if (!channel) throw new Error("RabbitMQ not connected");
-  await assertQueue(queue);
-  channel.sendToQueue(queue, Buffer.from(JSON.stringify(msg)), { persistent: true });
-}
-
-async function consumeQueue(queue, callback) {
-  if (!channel) throw new Error("RabbitMQ not connected");
-  await assertQueue(queue);
-  channel.consume(queue, async (msg) => {
-    if (msg) {
+async function consumeQueue(queueName, callback) {
+  if (!channel) throw new Error("RabbitMQ channel not initialized");
+  await channel.assertQueue(queueName, { durable: true });
+  channel.consume(queueName, async (msg) => {
+    if (msg !== null) {
       const data = JSON.parse(msg.content.toString());
-      try {
-        await callback(data);
-        channel.ack(msg);
-      } catch (err) {
-        console.error("❌ Worker error:", err.message);
-        channel.nack(msg, false, true);
-      }
+      await callback(data);
+      channel.ack(msg);
     }
   });
 }
 
-module.exports = { connectRabbitMQ, sendToQueue, consumeQueue };
+module.exports = { connectRabbitMQ, sendToWithdrawalQueue, consumeQueue };
