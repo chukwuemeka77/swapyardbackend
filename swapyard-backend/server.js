@@ -4,18 +4,23 @@ const cors = require("cors");
 const helmet = require("helmet");
 const mongoose = require("mongoose");
 const dotenv = require("dotenv");
-const path = require("path");
-
 dotenv.config();
+
+// optional: increase Node's event listeners if you have many SSE clients
+require("events").defaultMaxListeners = 50;
 
 const app = express();
 app.use(express.json());
 app.use(cors());
 app.use(helmet());
 
-// Rate limiter (optional global) - small wrapper you created
-const createRateLimiter = require("./src/middleware/rateLimiter");
-app.use(createRateLimiter({ windowMs: 60 * 1000, max: 200 }));
+// rate limiter (optional)
+try {
+  const createRateLimiter = require("./src/middleware/rateLimiter");
+  app.use(createRateLimiter({ windowMs: 60 * 1000, max: 200 }));
+} catch (e) {
+  console.warn("Rate limiter not applied:", e.message || e);
+}
 
 // ====== Connect MongoDB ======
 mongoose
@@ -26,24 +31,25 @@ mongoose
     process.exit(1);
   });
 
-// ====== Connect RabbitMQ (if you have connect function) ======
+// ====== Connect RabbitMQ (optional) ======
 try {
   const { connectRabbitMQ } = require("./src/services/rabbitmqService");
   if (typeof connectRabbitMQ === "function") {
     connectRabbitMQ().catch((e) => console.error("RabbitMQ connection error:", e));
   }
 } catch (err) {
-  console.warn("⚠️ rabbitmqService not available or already wired:", err.message || err);
+  console.warn("⚠️ rabbitmqService not loaded:", err.message || err);
 }
 
-// ====== Routes ======
+// ====== Mount existing routes ======
 const userRoutes = require("./src/routes/userRoutes");
 const walletRoutes = require("./src/routes/walletRoutes");
 const rapydWebhookRoutes = require("./src/routes/rapydWebhookRoutes");
 const notificationRoutes = require("./src/routes/notificationRoutes");
 const recurringRoutes = require("./src/routes/recurringRoutes");
 const adminRoutes = require("./src/routes/adminRoutes");
-const paymentRoutes = require("./src/routes/paymentRoutes"); // keep if exists
+const paymentRoutes = require("./src/routes/paymentRoutes");
+const adminAnalyticsRoutes = require("./src/routes/adminAnalytics");
 
 app.use("/api/users", userRoutes);
 app.use("/api/wallets", walletRoutes);
@@ -52,10 +58,10 @@ app.use("/api/notifications", notificationRoutes);
 app.use("/api/recurring", recurringRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/payments", paymentRoutes);
+app.use("/api/admin/analytics", adminAnalyticsRoutes);
 
-// ====== Start recurring scheduler (cron) ======
-// If you prefer this to run as a separate background worker, remove this require
-// and run `node src/services/recurringScheduler.js` in Render as a background service.
+// ====== Start recurring scheduler (node-cron) ======
+// If you prefer to run scheduler as a separate process, remove this require
 try {
   require("./src/services/recurringScheduler");
   console.log("🕒 Recurring scheduler loaded");
