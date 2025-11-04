@@ -1,150 +1,100 @@
-const express = require("express");
+// src/routes/userRoutes.js
+import express from "express";
+import auth from "../middleware/auth.js";
+import { rapydRequest } from "../services/rapydService.js";
+import { ensureUserWallet } from "../services/walletService.js";
+import Wallet from "../models/Wallet.js";
+import User from "../models/User.js";
+
 const router = express.Router();
-const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
-const axios = require("axios");
-const User = require("../models/User");
-const redisClient = require("../services/redisClient");
 
-require("dotenv").config();
-
-// ==================== Helper: fetch Rapyd countries with Redis caching ====================
-async function getRapydCountries() {
-  const cacheKey = "rapyd_countries";
-  const cached = await redisClient.get(cacheKey);
-  if (cached) return cached;
-
-  const response = await axios.get("https://sandboxapi.rapyd.net/v1/data/countries", {
-    headers: {
-      access_key: process.env.RAPYD_API_KEY,
-      secret_key: process.env.RAPYD_SECRET_KEY,
-    },
-  });
-
-  const countries = response.data.data;
-  await redisClient.set(cacheKey, countries, 86400); // cache 24h
-  return countries;
-}
-
-// ==================== SIGNUP ====================
-router.post("/signup", async (req, res) => {
+/**
+ * ✅ GET /api/users/me
+ * Fetch user dashboard, wallet & transactions
+ */
+router.get("/me", auth, async (req, res) => {
   try {
-    const { name, identifier, password, country } = req.body;
+    const user = req.user;
 
-    // Validate required fields
-    if (!name || !password || !identifier) {
-      return res.status(400).json({ error: "Name, password, and email or phone are required" });
-    }
+    // Ensure wallet exists (creates one if missing)
+    const wallet = await ensureUserWallet(user);
 
-    // Check if user exists
-    const existingUser = await User.findOne({
-      $or: [{ email: identifier.includes("@") ? identifier : null }, { phone: !identifier.includes("@") ? identifier : null }],
-    });
+    // Fetch wallet info from Rapyd
+    const walletRes = await rapydRequest("GET", `/v1/user/${user.rapydId}/wallets`);
+    const wallets = walletRes.data || [];
+    if (!wallets.length) return res.status(404).json({ error: "No wallet found for user" });
 
-    if (existingUser) return res.status(400).json({ error: "User already exists" });
+    const rapydWallet = wallets[0];
 
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
+    // Fetch transactions from Rapyd
+    const txRes = await rapydRequest("GET", `/v1/wallets/${rapydWallet.id}/transactions`);
+    const transactions = txRes.data || [];
 
-    // Fetch countries from Rapyd
-    const countries = await getRapydCountries();
-
-    // Determine default currency
-    const selectedCountry = countries.find(
-      (c) => c.name.toLowerCase() === country.toLowerCase()
+    // Optional: sync wallet balance locally
+    await Wallet.findOneAndUpdate(
+      { userId: user._id },
+      { balance: rapydWallet.balance },
+      { new: true }
     );
-    if (!selectedCountry) return res.status(400).json({ error: "Country not supported" });
-    const currency = selectedCountry.currency;
 
-    // Create user
-    const user = new User({
+    res.json({
+      name: user.name,
+      email: user.email,
+      phone: user.phone,
+      currency: rapydWallet.currency,
+      balance: rapydWallet.balance,
+      walletId: rapydWallet.id,
+      transactions: transactions.map((tx) => ({
+        id: tx.id,
+        amount: tx.amount,
+        currency: tx.currency,
+        type: tx.type,
+        description: tx.description || tx.type,
+        created_at: tx.created_at,
+      })),
+    });
+  } catch (err) {
+    console.error("❌ Error in /me:", err.response?.data || err.message);
+    res.status(500).json({ error: "Failed to load user dashboard" });
+  }
+});
+
+/**
+ * ✅ POST /api/users/register
+ * Register user and create Rapyd wallet automatically
+ */
+router.post("/register", async (req, res) => {
+  try {
+    const { name, email, phone, password, preferredCurrency } = req.body;
+
+    const user = await User.create({
       name,
-      email: identifier.includes("@") ? identifier : null,
-      phone: identifier.includes("@") ? null : identifier,
-      passwordHash: hashedPassword,
-      defaultCountry: country,
-      defaultCurrency: currency,
-      balances: [{ currency, amount: 0 }],
+      email,
+      phone,
+      password, // hashed via pre-save
+      currency: preferredCurrency || "USD",
     });
-    await user.save();
 
-    // Create Rapyd wallet (non-KYC)
-    const walletResponse = await axios.post(
-      "https://sandboxapi.rapyd.net/v1/wallets",
-      {
-        name: name,
-        currency,
-        type: "personal",
-        ewallet_reference_id: user._id.toString(),
-        metadata: { identifier, country },
-      },
-      {
-        headers: {
-          access_key: process.env.RAPYD_API_KEY,
-          secret_key: process.env.RAPYD_SECRET_KEY,
-        },
-      }
-    );
-
-    user.rapydId = walletResponse.data.data.id;
+    // Create Rapyd wallet
+    const wallet = await ensureUserWallet(user);
+    user.rapydId = wallet.rapydWalletId;
     await user.save();
 
     res.status(201).json({
-      message: "Signup successful",
-      user: {
-        id: user._id,
-        identifier,
-        wallet_id: user.rapydId,
-        currency: user.defaultCurrency,
-      },
-    });
-  } catch (err) {
-    console.error("Signup error:", err.response?.data || err);
-    res.status(500).json({ error: "Signup failed" });
-  }
-});
-
-// ==================== LOGIN ====================
-router.post("/login", async (req, res) => {
-  try {
-    const { identifier, password } = req.body;
-
-    if (!identifier || !password)
-      return res.status(400).json({ error: "Email/phone and password are required" });
-
-    // Find user
-    const user = await User.findOne({
-      $or: [
-        { email: identifier.includes("@") ? identifier : null },
-        { phone: !identifier.includes("@") ? identifier : null },
-      ],
-    });
-
-    if (!user) return res.status(400).json({ error: "User not found" });
-
-    const valid = await bcrypt.compare(password, user.passwordHash);
-    if (!valid) return res.status(400).json({ error: "Invalid credentials" });
-
-    // JWT token
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET || "defaultsecret", {
-      expiresIn: "7d",
-    });
-
-    res.status(200).json({
-      message: "Login successful",
-      token,
-      user: {
-        id: user._id,
+      success: true,
+      message: "User registered successfully",
+      data: {
+        userId: user._id,
         name: user.name,
-        identifier: user.email || user.phone,
-        wallet_id: user.rapydId,
-        currency: user.defaultCurrency,
+        email: user.email,
+        walletId: wallet.rapydWalletId,
+        currency: wallet.currency,
       },
     });
   } catch (err) {
-    console.error("Login error:", err);
-    res.status(500).json({ error: "Server error during login" });
+    console.error("❌ Registration error:", err.response?.data || err.message);
+    res.status(500).json({ error: "Registration failed" });
   }
 });
 
-module.exports = router;
+export default router;
