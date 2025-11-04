@@ -1,50 +1,84 @@
-// src/routes/userRoutes.js
 import express from "express";
 import auth from "../middleware/auth.js";
-import { rapydRequest } from "../utils/rapyd.js";
+import { ensureUserWallet } from "../services/walletService.js"; // 👈 new import
+import { rapydRequest } from "../services/rapydService.js";
+import User from "../models/User.js";
+import Wallet from "../models/Wallet.js";
 
 const router = express.Router();
 
-// GET /api/users/me
+/**
+ * POST /api/users/register
+ * Creates a new user and ensures a Rapyd wallet exists
+ */
+router.post("/register", async (req, res) => {
+  try {
+    const { name, email, phone, password, preferredCurrency } = req.body;
+
+    // ✅ Create user
+    const user = await User.create({
+      name,
+      email,
+      phone,
+      password, // hash in pre-save hook
+      currency: preferredCurrency || "USD",
+    });
+
+    // ✅ Create Rapyd wallet and local Wallet record
+    const wallet = await ensureUserWallet(user);
+
+    // ✅ Update user with Rapyd wallet ID
+    user.rapydId = wallet.rapydWalletId;
+    await user.save();
+
+    res.status(201).json({
+      success: true,
+      message: "User registered successfully",
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        wallet: {
+          id: wallet._id,
+          rapydWalletId: wallet.rapydWalletId,
+          currency: wallet.currency,
+          balance: wallet.balance,
+        },
+      },
+    });
+  } catch (err) {
+    console.error("❌ Registration error:", err.response?.data || err.message);
+    res.status(500).json({ error: "User registration failed" });
+  }
+});
+
+/**
+ * GET /api/users/me
+ * Returns current user dashboard info
+ */
 router.get("/me", auth, async (req, res) => {
   try {
-    const user = req.user; // added by auth middleware
+    const user = req.user;
+    const wallet = await Wallet.findOne({ userId: user._id });
 
-    if (!user.rapydId) {
-      return res.status(400).json({ error: "User has no associated Rapyd ID" });
-    }
-
-    // ✅ Fetch wallets from Rapyd
-    const walletRes = await rapydRequest("GET", `/user/${user.rapydId}/wallets`);
-    const wallets = walletRes.data || [];
-
-    if (!wallets.length) {
+    if (!wallet)
       return res.status(404).json({ error: "No wallet found for user" });
-    }
 
-    const wallet = wallets[0]; // primary wallet
-
-    // ✅ Fetch transactions
-    const txRes = await rapydRequest("GET", `/wallets/${wallet.id}/transactions`);
-    const transactions = txRes.data || [];
+    // Optionally sync with Rapyd wallet
+    const rapydWallet = await rapydRequest("GET", `/v1/user/${user.rapydId}/wallets`);
+    const walletData = rapydWallet.data?.[0] || {};
 
     res.json({
       name: user.name,
       email: user.email,
       phone: user.phone,
-      balances: wallet.balance,
-      currency: wallet.currency,
-      transactions: transactions.map((tx) => ({
-        id: tx.id,
-        amount: tx.amount,
-        currency: tx.currency,
-        description: tx.description || tx.type,
-        created_at: tx.created_at,
-      })),
+      currency: walletData.currency || wallet.currency,
+      balance: walletData.balance || wallet.balance,
+      walletId: wallet.rapydWalletId,
     });
   } catch (err) {
     console.error("Error in /me:", err.response?.data || err.message);
-    res.status(500).json({ error: "Failed to load dashboard data" });
+    res.status(500).json({ error: "Failed to load user data" });
   }
 });
 
