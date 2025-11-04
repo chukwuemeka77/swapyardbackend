@@ -1,90 +1,65 @@
-// src/workers/recurringPaymentWorker.js
+// src/workers/recurringWorker.js
 const { consumeQueue } = require("../services/rabbitmqService");
 const { notifyUser } = require("../services/sseService");
 const redisClient = require("../services/redisClient");
 const MarkupSetting = require("../models/markupSettings");
 const Transaction = require("../models/Transaction");
 const Wallet = require("../models/Wallet");
-const RecurringPayment = require("../models/RecurringPayment");
 const { rapydRequest } = require("../services/rapydService");
 const mongoose = require("mongoose");
 
-const GLOBAL_MARKUP = (() => { const v = process.env.MARKUP_PERCENT; return v ? parseFloat(v) : null; })();
-const SWAPYARD_WALLET_ID = process.env.SWAPYARD_WALLET_ID;
-if (!SWAPYARD_WALLET_ID) console.warn("⚠️ SWAPYARD_WALLET_ID not set; markup transfers will fail.");
-
-function round2(n) { return Math.round((Number(n) + Number.EPSILON) * 100) / 100; }
+const SWAPYARD_EWALLET_ID = process.env.SWAPYARD_EWALLET_ID;
 
 (async () => {
   await consumeQueue("recurringPaymentQueue", async (job) => {
-    const { userId, walletId, amount, currency, transactionId, scheduleId } = job;
-    console.log("🔁 recurringWorker: starting", { transactionId, scheduleId });
-
-    let markupPercent = GLOBAL_MARKUP;
-    try { if (markupPercent === null) { const db = await MarkupSetting.findOne({ type: "recurring" }); markupPercent = db ? db.percentage : 0; } } catch (err) { console.warn("⚠️ markup load fail:", err.message || err); markupPercent = markupPercent || 0; }
-    markupPercent = Number(markupPercent || 0);
-
-    const markupAmount = round2((amount * markupPercent) / 100);
-    const finalAmount = round2(amount + markupAmount);
+    const { userId, walletId, amount, currency, transactionId } = job;
+    console.log("📆 Processing recurring payment:", transactionId);
 
     const session = await mongoose.startSession();
     session.startTransaction();
+
     try {
-      let tx = null;
-      if (transactionId) tx = await Transaction.findById(transactionId).session(session);
-      if (!tx) {
-        tx = (await Transaction.create([{
-          _id: transactionId,
-          userId,
-          walletId,
-          type: "recurring",
-          amount: finalAmount,
-          currency,
-          status: "processing",
-          metadata: { scheduleId },
-        }], { session }))[0];
-      } else {
-        tx.amount = finalAmount; tx.status = "processing"; tx.metadata = tx.metadata || {}; tx.metadata.scheduleId = scheduleId; await tx.save({ session });
-      }
-      if (walletId) await Wallet.findByIdAndUpdate(walletId, { $inc: { balance: finalAmount } }, { session });
+      const wallet = await Wallet.findById(walletId).session(session);
+      if (!wallet) throw new Error("Wallet not found");
+
+      const markup = await MarkupSetting.findOne({ type: "recurring" });
+      const markupPercent = markup ? markup.percentage : 0;
+      const markupAmount = amount * (markupPercent / 100);
+      const totalDebit = amount + markupAmount;
+
+      if (wallet.balance < totalDebit) throw new Error("Insufficient funds for recurring payment");
+
+      // ✅ Transfer markup to Swapyard Rapyd wallet
+      await rapydRequest("post", "/v1/account/transfer", {
+        source_ewallet: wallet.rapydEwalletId,
+        destination_ewallet: SWAPYARD_EWALLET_ID,
+        amount: markupAmount,
+        currency,
+      });
+
+      wallet.balance -= totalDebit;
+      await wallet.save({ session });
+
+      await Transaction.findByIdAndUpdate(
+        transactionId,
+        { status: "completed", amount },
+        { session }
+      );
+
       await session.commitTransaction();
+
+      notifyUser(userId, { type: "recurring_payment_complete", data: { amount, currency } });
+      await redisClient.publish(
+        "notifications",
+        JSON.stringify({ userId, data: { type: "recurring_payment_complete", amount, currency } })
+      );
+
+      console.log(`✅ Recurring payment done for ${userId}, markup sent to Swapyard.`);
+    } catch (err) {
+      await session.abortTransaction();
+      console.error("❌ Recurring payment failed:", err.message);
+    } finally {
       session.endSession();
-    } catch (err) {
-      await session.abortTransaction(); session.endSession();
-      console.error("❌ recurring DB error:", err.message || err);
-      throw err;
     }
-
-    try {
-      await rapydRequest("POST", "/v1/payments", { amount: finalAmount, currency, customer: userId, wallet: walletId, metadata: { transactionId, scheduleId } });
-      console.log("✅ rapyd recurring payment success", transactionId);
-    } catch (err) {
-      console.error("❌ rapyd recurring payment failed:", err.response?.data || err.message || err);
-      try { await Transaction.findByIdAndUpdate(transactionId, { status: "failed", error: err.message }); } catch (e) {}
-      notifyUser(userId, { type: "recurring_failed", data: { transactionId, amount: finalAmount } });
-      await redisClient.publish("notifications", JSON.stringify({ userId, data: { type: "recurring_failed", transactionId } }));
-      return;
-    }
-
-    // mandatory markup transfer
-    if (markupAmount > 0) {
-      try {
-        await rapydRequest("POST", "/v1/account/transfer", { source_ewallet: walletId, destination_ewallet: SWAPYARD_WALLET_ID, amount: markupAmount, currency, metadata: { transactionId, scheduleId, type: "markup_fee" } });
-        console.log(`💰 recurring markup transferred ${markupAmount} ${currency}`);
-      } catch (err) {
-        console.error("❌ recurring markup transfer failed:", err.response?.data || err.message || err);
-        try { await Transaction.findByIdAndUpdate(transactionId, { markupAmount, markupTransferStatus: "failed" }); } catch (e) {}
-        notifyUser(userId, { type: "recurring_markup_failed", data: { transactionId, markupAmount } });
-        await redisClient.publish("notifications", JSON.stringify({ userId, data: { type: "recurring_markup_failed", transactionId, markupAmount } }));
-      }
-    }
-
-    try {
-      await Transaction.findByIdAndUpdate(transactionId, { status: "completed", amount: finalAmount, markupAmount, completedAt: new Date() });
-    } catch (err) { console.warn("⚠️ recurring finalize failed:", err.message || err); }
-
-    notifyUser(userId, { type: "recurring_complete", data: { transactionId, amount: finalAmount, markupAmount } });
-    await redisClient.publish("notifications", JSON.stringify({ userId, data: { type: "recurring_complete", transactionId, amount: finalAmount } }));
-    console.log("✅ recurringWorker finished", transactionId);
   });
 })();
