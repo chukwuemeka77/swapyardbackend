@@ -50,6 +50,7 @@ const recurringRoutes = require("./src/routes/recurringRoutes");
 const adminRoutes = require("./src/routes/adminRoutes");
 const paymentRoutes = require("./src/routes/paymentRoutes");
 const adminAnalyticsRoutes = require("./src/routes/adminAnalytics");
+const adminActions = require("./src/routes/adminActions");
 
 app.use("/api/users", userRoutes);
 app.use("/api/wallets", walletRoutes);
@@ -59,7 +60,7 @@ app.use("/api/recurring", recurringRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/admin/analytics", adminAnalyticsRoutes);
-
+app.use("/api/admin/actions", adminActions);
 // ====== Start recurring scheduler (node-cron) ======
 // If you prefer to run scheduler as a separate process, remove this require
 try {
