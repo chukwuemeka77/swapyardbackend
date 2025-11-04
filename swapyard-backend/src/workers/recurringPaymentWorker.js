@@ -19,51 +19,50 @@ if (!SWAPYARD_WALLET_ID) {
   console.warn("⚠️ SWAPYARD_WALLET_ID is not set. Markup transfers will fail.");
 }
 
-// helper: safe numeric rounding (2 decimals)
 function round2(n) {
-  return Math.round((n + Number.EPSILON) * 100) / 100;
+  return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 }
 
-// Consume recurringPaymentQueue
 (async () => {
   await consumeQueue("recurringPaymentQueue", async (job) => {
     const {
       userId,
-      walletId,      // ewallet id or internal wallet reference
+      walletId,
       amount,
       currency,
-      transactionId, // DB transaction _id (string)
-      scheduleId,    // recurring schedule id
+      transactionId,
+      scheduleId,
       retries = 0,
     } = job;
 
-    console.log("🔁 recurringWorker: processing job", { transactionId, scheduleId, userId });
+    console.log("🔁 recurringWorker: processing", { transactionId, scheduleId, userId });
 
-    // Fetch markup: env override -> DB per-type
+    // 1) Determine markup percent (env override -> DB)
     let markupPercent = GLOBAL_MARKUP;
     try {
       if (markupPercent === null) {
-        const dbMarkup = await MarkupSetting.findOne({ type: "recurring" });
-        markupPercent = dbMarkup ? dbMarkup.percentage : 0;
+        const db = await MarkupSetting.findOne({ type: "recurring" });
+        markupPercent = db ? db.percentage : 0;
       }
     } catch (err) {
-      console.warn("⚠️ Could not fetch markupSetting, using 0:", err.message || err);
+      console.warn("⚠️ Could not load markupSetting, defaulting to 0:", err.message || err);
       markupPercent = markupPercent || 0;
     }
-
     markupPercent = Number(markupPercent || 0);
+
     const markupAmount = round2((amount * markupPercent) / 100);
     const finalAmount = round2(amount + markupAmount);
 
-    // Start DB transaction: update Transaction status and Wallet balances atomically
+    // 2) DB transaction: ensure transaction exists and credit user wallet
     const session = await mongoose.startSession();
     session.startTransaction();
     try {
-      // Update transaction doc (ensure it exists)
-      const tx = await Transaction.findById(transactionId).session(session);
+      let tx = null;
+      if (transactionId) {
+        tx = await Transaction.findById(transactionId).session(session);
+      }
       if (!tx) {
-        // create if missing (defensive)
-        await Transaction.create(
+        tx = await Transaction.create(
           [
             {
               _id: transactionId,
@@ -78,6 +77,7 @@ function round2(n) {
           ],
           { session }
         );
+        tx = tx[0];
       } else {
         tx.amount = finalAmount;
         tx.status = "processing";
@@ -86,14 +86,8 @@ function round2(n) {
         await tx.save({ session });
       }
 
-      // If wallets are tracked locally, credit user wallet with the finalAmount (depends on model)
-      // Here we assume walletId maps to a Wallet._id
       if (walletId) {
-        await Wallet.findByIdAndUpdate(
-          walletId,
-          { $inc: { balance: finalAmount } },
-          { session }
-        );
+        await Wallet.findByIdAndUpdate(walletId, { $inc: { balance: finalAmount } }, { session });
       }
 
       await session.commitTransaction();
@@ -101,17 +95,13 @@ function round2(n) {
     } catch (err) {
       await session.abortTransaction();
       session.endSession();
-      console.error("❌ recurringWorker DB transaction failed:", err.message || err);
-      // Optionally requeue or mark failed
-      // Re-throw to cause queue requeue behavior if configured
+      console.error("❌ recurringWorker DB error:", err.message || err);
+      // re-throw to let queue system handle retry policies
       throw err;
     }
 
-    // 2) Charge / payout using Rapyd API (business logic: charge user / record payment)
-    // For recurring, typical flow: charge user's stored payment method or debit user's ewallet
+    // 3) Execute payment via Rapyd (charge or record payment)
     try {
-      // Example API: create a payment or debit the user's wallet
-      // NOTE: adjust endpoint and payload per your Rapyd integration (customer/payment method)
       const paymentPayload = {
         amount: finalAmount,
         currency,
@@ -119,70 +109,64 @@ function round2(n) {
         wallet: walletId,
         metadata: { transactionId, scheduleId, type: "recurring_charge" },
       };
-
       await rapydRequest("POST", "/v1/payments", paymentPayload);
-      console.log("✅ rapyd recurring payment succeeded for tx", transactionId);
+      console.log("✅ Rapyd payment success for tx", transactionId);
     } catch (err) {
-      console.error("❌ rapyd recurring payment error:", err.response?.data || err.message || err);
-      // mark tx failed in DB and notify; optionally requeue with backoff
+      console.error("❌ Rapyd recurring payment failed:", err.response?.data || err.message || err);
+      // mark transaction failed and notify
       try {
         await Transaction.findByIdAndUpdate(transactionId, { status: "failed", error: err.message });
-      } catch (e) { /* ignore */ }
-
+      } catch (e) {}
       notifyUser(userId, {
         type: "recurring_payment_failed",
         data: { transactionId, amount: finalAmount, currency, reason: err.message },
       });
       await redisClient.publish(
         "notifications",
-        JSON.stringify({ userId, data: { type: "recurring_payment_failed", transactionId, amount: finalAmount, currency } })
+        JSON.stringify({
+          userId,
+          data: { type: "recurring_payment_failed", transactionId, amount: finalAmount, currency },
+        })
       );
-      return; // stop processing this job
+      return;
     }
 
-    // 3) Move markup to Swapyard Rapyd wallet (MANDATORY)
+    // 4) MANDATORY: transfer markup to Swapyard Rapyd wallet
     if (markupAmount > 0) {
       try {
-        // Use centralized rapydRequest to transfer from user's wallet to Swapyard
-        // Adjust endpoint/path if your Rapyd wrapper expects a different route
         const transferPayload = {
-          source_ewallet: walletId, // user's ewallet id or source account
+          source_ewallet: walletId,
           destination_ewallet: SWAPYARD_WALLET_ID,
           amount: markupAmount,
           currency,
           metadata: { transactionId, scheduleId, type: "markup_fee" },
         };
-
-        // Use POST /v1/account/transfer or /v1/wallets/transfer depending on your Rapyd usage
-        // Here we call /v1/account/transfer as used elsewhere in this project
         await rapydRequest("POST", "/v1/account/transfer", transferPayload);
-        console.log(`💰 Markup transferred ${markupAmount} ${currency} to Swapyard wallet`);
+        console.log(`💰 Markup ${markupAmount} ${currency} transferred to Swapyard wallet`);
       } catch (err) {
-        // Very important: if the transfer fails we must record and alert
         console.error("❌ Markup transfer failed:", err.response?.data || err.message || err);
-
-        // Persist failure info to Transaction (for admin retries)
+        // record markup transfer failure for admin retry; do not rollback user charge
         try {
           await Transaction.findByIdAndUpdate(transactionId, {
-            $set: { markupTransferStatus: "failed", markupAmount },
+            $set: { markupAmount, markupTransferStatus: "failed" },
           });
-        } catch (e) { /* ignore */ }
-
-        // Notify admin/system (you can hook into email/SMS or alerting)
+        } catch (e) {}
         notifyUser(userId, {
-          type: "recurring_payment_markup_transfer_failed",
+          type: "recurring_payment_markup_failed",
           data: { transactionId, markupAmount, currency },
         });
         await redisClient.publish(
           "notifications",
-          JSON.stringify({ userId, data: { type: "recurring_payment_markup_transfer_failed", transactionId, markupAmount, currency } })
+          JSON.stringify({
+            userId,
+            data: { type: "recurring_payment_markup_failed", transactionId, markupAmount, currency },
+          })
         );
-
-        // Do NOT rollback user transaction because user was charged; let admin retry markup transfer later.
+        // keep going — admin can retry markup transfer via admin route
       }
     }
 
-    // 4) Finalize transaction status (completed) and notify user
+    // 5) Finalize transaction and notify user
     try {
       await Transaction.findByIdAndUpdate(transactionId, {
         status: "completed",
@@ -191,7 +175,7 @@ function round2(n) {
         completedAt: new Date(),
       });
     } catch (err) {
-      console.warn("⚠️ Could not update transaction final status:", err.message || err);
+      console.warn("⚠️ Could not finalize transaction:", err.message || err);
     }
 
     notifyUser(userId, {
@@ -200,30 +184,29 @@ function round2(n) {
     });
     await redisClient.publish(
       "notifications",
-      JSON.stringify({ userId, data: { type: "recurring_payment_complete", transactionId, amount: finalAmount, currency, markupAmount } })
+      JSON.stringify({
+        userId,
+        data: { type: "recurring_payment_complete", transactionId, amount: finalAmount, currency, markupAmount },
+      })
     );
 
-    // 5) Optionally update RecurringPayment.nextRun if immediate trigger (scheduler usually advances it)
+    // 6) Bump schedule nextRun if scheduleId provided (scheduler typically handles this)
     try {
       if (scheduleId) {
         const sched = await RecurringPayment.findById(scheduleId);
-        if (sched && sched.active) {
-          // ensure nextRun is in future; scheduler is mainly responsible, but we can bump a small safety window
-          if (!sched.nextRun || new Date(sched.nextRun) <= new Date()) {
-            // safety: increment according to frequency
-            const next = new Date();
-            if (sched.frequency === "daily") next.setDate(next.getDate() + 1);
-            else if (sched.frequency === "weekly") next.setDate(next.getDate() + 7);
-            else if (sched.frequency === "monthly") next.setMonth(next.getMonth() + 1);
-            sched.nextRun = next;
-            await sched.save();
-          }
+        if (sched && sched.active && (!sched.nextRun || new Date(sched.nextRun) <= new Date())) {
+          const next = new Date();
+          if (sched.frequency === "daily") next.setDate(next.getDate() + 1);
+          else if (sched.frequency === "weekly") next.setDate(next.getDate() + 7);
+          else if (sched.frequency === "monthly") next.setMonth(next.getMonth() + 1);
+          sched.nextRun = next;
+          await sched.save();
         }
       }
     } catch (err) {
-      console.warn("⚠️ Could not advance recurring schedule nextRun:", err.message || err);
+      console.warn("⚠️ Could not update schedule nextRun:", err.message || err);
     }
 
-    console.log("✅ recurringWorker finished job", transactionId);
+    console.log("✅ recurringWorker finished", transactionId);
   });
 })();
