@@ -1,117 +1,52 @@
 // src/routes/authRoutes.js
 const express = require("express");
-const bcrypt = require("bcryptjs");
+const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
-const { ensureUserWallet } = require("../services/walletService"); // utility to create/fetch Rapyd wallet
-const auth = require("../middleware/auth");
-require("dotenv").config();
+const { ensureUserWallet } = require("../services/walletService");
 
 const router = express.Router();
-const JWT_SECRET = process.env.JWT_SECRET;
 
-// ==================== REGISTER ====================
+// ---------------- Register ----------------
 router.post("/register", async (req, res) => {
   try {
     const { name, email, phone, password, currency } = req.body;
 
     // Check if user exists
-    const existingUser = await User.findOne({ $or: [{ email }, { phone }] });
-    if (existingUser) {
-      return res.status(400).json({ error: "Email or phone already registered" });
-    }
+    const existing = await User.findOne({ $or: [{ email }, { phone }] });
+    if (existing) return res.status(400).json({ error: "User already exists" });
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const hashed = await bcrypt.hash(password, 10);
+    const user = await User.create({ name, email, phone, password: hashed, currency });
 
-    // Create user
-    const user = await User.create({
-      name,
-      email,
-      phone,
-      password: hashedPassword,
-      currency,
-    });
-
-    // Create Rapyd wallet
+    // Ensure Rapyd wallet creation
     const wallet = await ensureUserWallet(user);
 
-    // Return token
-    const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: "7d" });
+    // JWT token
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: "7d" });
 
-    res.json({
-      success: true,
-      token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        walletId: wallet.rapydWalletId,
-        currency: wallet.currency,
-      },
-    });
+    res.json({ success: true, token, user: { id: user._id, name, email, phone, currency } });
   } catch (err) {
     console.error("Registration error:", err);
-    res.status(500).json({ error: "Registration failed" });
+    res.status(500).json({ error: "Failed to register" });
   }
 });
 
-// ==================== LOGIN ====================
+// ---------------- Login ----------------
 router.post("/login", async (req, res) => {
   try {
-    const { identifier, password } = req.body; // identifier = email or phone
-
-    const user = await User.findOne({
-      $or: [{ email: identifier }, { phone: identifier }],
-    });
-
-    if (!user) return res.status(400).json({ error: "Invalid credentials" });
-
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(400).json({ error: "Invalid credentials" });
-
-    // Ensure wallet exists
-    const wallet = await ensureUserWallet(user);
-
-    const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: "7d" });
-
-    res.json({
-      success: true,
-      token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        walletId: wallet.rapydWalletId,
-        currency: wallet.currency,
-      },
-    });
-  } catch (err) {
-    console.error("Login error:", err);
-    res.status(500).json({ error: "Login failed" });
-  }
-});
-
-// ==================== GET CURRENT USER ====================
-router.get("/me", auth, async (req, res) => {
-  try {
-    const user = await User.findById(req.user.id);
+    const { emailOrPhone, password } = req.body;
+    const user = await User.findOne({ $or: [{ email: emailOrPhone }, { phone: emailOrPhone }] });
     if (!user) return res.status(404).json({ error: "User not found" });
 
-    const wallet = await ensureUserWallet(user);
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) return res.status(401).json({ error: "Invalid password" });
 
-    res.json({
-      id: user._id,
-      name: user.name,
-      email: user.email,
-      phone: user.phone,
-      walletId: wallet.rapydWalletId,
-      currency: wallet.currency,
-    });
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: "7d" });
+    res.json({ success: true, token, user: { id: user._id, name: user.name, email: user.email, phone: user.phone, currency: user.currency } });
   } catch (err) {
-    console.error("Fetch user error:", err);
-    res.status(500).json({ error: "Failed to fetch user" });
+    console.error("Login error:", err);
+    res.status(500).json({ error: "Failed to login" });
   }
 });
 
